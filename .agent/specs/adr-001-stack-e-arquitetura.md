@@ -37,6 +37,10 @@ presentation (CustomTkinter)  →  application (serviços/casos de uso)
 - **Export:** PDF (`reportlab`/`weasyprint`) + Excel (`openpyxl`)
 - **Testes:** `pytest` + `pytest-cov` (TDD)
 
+### Adendo (Fase 3) — Renderização OCR sem poppler
+- **Decisão:** o OCR renderiza páginas com **PyMuPDF (`page.get_pixmap`)**, não com `pdf2image`. `pdf2image` exige o binário **poppler** (atrito de instalação no Windows); PyMuPDF já é dependência e renderiza sem ele.
+- **Impactos no manifesto:** `pdf2image` **removido** de `pyproject.toml`; `pillow` **adicionado** (dependência transitiva do `pytesseract`, necessária ao caminho OCR real).
+
 ## 3. Consequências e Impactos
 - **Positivos:** privacidade preservada (dados locais + extração híbrida); domínio testável; baixa dependência de infra; troca de banco/UI sem reescrita do núcleo.
 - **Negativos/Riscos aceitos:**

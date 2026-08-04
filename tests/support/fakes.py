@@ -9,13 +9,16 @@
 """
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 from pymongo.errors import DuplicateKeyError
 
 from contract_parser.domain.cnpj import normalizar_cnpj
+from contract_parser.domain.documento_texto import DocumentoTexto
 from contract_parser.domain.empresa import Empresa
+from contract_parser.domain.extracao import ResultadoOcr
 
 
 class FakeEmpresaRepository:
@@ -99,3 +102,60 @@ class FakeCollection:
             base.update(set_doc)
             self.store[_id] = dict(base)
         return SimpleNamespace(upserted_count=upserts, modified_count=len(operations) - upserts)
+
+
+class FakeExtractor:
+    """Extrator fake que satisfaz ``ExtratorTexto`` (sem tocar bibliotecas).
+
+    - ``extensao``: extensão que este backend aceita (ex.: ``.pdf``).
+    - ``resultado``: :class:`DocumentoTexto` a devolver (se dado); caso contrário
+      um resultado sintético é montado por caminho.
+    - ``chamadas``: registra os caminhos passados a ``extrair`` (verificação de
+      roteamento por extensão).
+    """
+
+    def __init__(
+        self,
+        extensao: str,
+        *,
+        resultado: DocumentoTexto | None = None,
+        texto: str = "conteudo fake",
+        metodo: str = "nativo",
+    ) -> None:
+        self.extensao = extensao.lower()
+        self._resultado = resultado
+        self._texto = texto
+        self._metodo = metodo
+        self.chamadas: list[Path] = []
+
+    def aceita(self, caminho: Path) -> bool:
+        return caminho.suffix.lower() == self.extensao
+
+    def extrair(self, caminho: Path) -> DocumentoTexto:
+        self.chamadas.append(caminho)
+        if self._resultado is not None:
+            return self._resultado
+        return DocumentoTexto(
+            caminho=str(caminho),
+            hash=f"hash-{caminho.name}",
+            texto=self._texto,
+            metodo=self._metodo,  # type: ignore[arg-type]
+        )
+
+
+class FakeOcr:
+    """Motor de OCR fake (implementa ``OcrEngine``) sem exigir Tesseract.
+
+    Devolve ``resultado`` fixo e registra em ``chamadas`` os bytes recebidos —
+    permite verificar que a rota nativo→OCR foi de fato acionada.
+    """
+
+    def __init__(self, resultado: ResultadoOcr | None = None) -> None:
+        self._resultado = resultado or ResultadoOcr(
+            texto="texto reconhecido por ocr", paginas=1, baixa_confianca=True
+        )
+        self.chamadas: list[bytes] = []
+
+    def reconhecer(self, dados: bytes) -> ResultadoOcr:
+        self.chamadas.append(dados)
+        return self._resultado

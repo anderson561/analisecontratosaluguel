@@ -20,6 +20,22 @@ pip install -e ".[dev]"
 copy .env.example .env   # ajuste MONGO_URI, TESSERACT_CMD, etc.
 ```
 
+## Verificação de ambiente (Fase 1)
+Antes de rodar a aplicação, confirme que o host está pronto:
+```bash
+contract-parser-envcheck          # se o pacote foi instalado com pip install -e .
+# ou, sem instalar o pacote:
+set PYTHONPATH=src && python -m contract_parser.infrastructure.environment_check
+```
+Reporta PASS/FAIL para Python ≥ 3.11, MongoDB acessível e Tesseract (idioma `por`),
+com instruções do que instalar quando algo falta. Exit code 0 = tudo OK, 1 = há pendências.
+
+### Instalação manual dos serviços de sistema (não automatizada)
+| Serviço | Instalação (Windows) | Como verificar |
+|---------|----------------------|----------------|
+| **MongoDB Community** | Instalador oficial como *serviço* (porta 27017) | `Get-Service MongoDB` (deve estar *Running*) ou `mongosh --eval "db.runCommand({ping:1})"` |
+| **Tesseract-OCR** | Instalador UB-Mannheim + pacote de idioma `por`; ajuste `TESSERACT_CMD` no `.env` | `tesseract --version` e `tesseract --list-langs` (deve listar `por`) |
+
 ## Testes
 ```bash
 pytest

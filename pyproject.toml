@@ -17,6 +17,9 @@ dependencies = [
     "rapidfuzz>=3.9",
 ]
 
+[project.scripts]
+contract-parser-envcheck = "contract_parser.infrastructure.environment_check:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.2",
@@ -33,7 +36,11 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 addopts = "-ra --cov=contract_parser --cov-report=term-missing"
+markers = [
+    "integration: testes que exigem servicos reais (ex.: MongoDB vivo); skip automatico se indisponivel",
+]
 
 [tool.ruff]
 line-length = 100

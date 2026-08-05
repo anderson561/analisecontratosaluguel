@@ -36,33 +36,92 @@ com instruções do que instalar quando algo falta. Exit code 0 = tudo OK, 1 = h
 | **MongoDB Community** | Instalador oficial como *serviço* (porta 27017) | `Get-Service MongoDB` (deve estar *Running*) ou `mongosh --eval "db.runCommand({ping:1})"` |
 | **Tesseract-OCR** | Instalador UB-Mannheim + pacote de idioma `por`; ajuste `TESSERACT_CMD` no `.env` | `tesseract --version` e `tesseract --list-langs` (deve listar `por`) |
 
+## Como rodar a aplicação (GUI)
+Com o ambiente pronto (venv ativo, MongoDB rodando, `.env` configurado):
+```bash
+contract-parser-gui                # se o pacote foi instalado com pip install -e .
+# ou, sem instalar o pacote:
+set PYTHONPATH=src && python -m contract_parser.presentation.app
+```
+A GUI abre mesmo com o MongoDB fora do ar (degradação graciosa — banner de
+status avisa e as abas que dependem do banco falham com mensagem amigável,
+sem derrubar o processo).
+
 ## Testes
 ```bash
-pytest
+pytest                          # suíte completa (unit + integração + E2E headless)
+pytest -q --cov                 # com relatório de cobertura no terminal
+ruff check src tests            # lint (zero warnings é o padrão do projeto)
 ```
+Testes marcados `integration` (ex.: MongoDB vivo) fazem `skip` automático
+quando o serviço não está disponível — não é falha, é ambiente incompleto.
+Alguns skips são esperados em clone limpo/CI: MongoDB parado, `pytesseract`
+não instalado, provedor de LLM não configurado (decisão adiada, ver Backlog) e
+o harness de contratos reais (`CONTRATOS_REAIS_DIR` não definida — ver abaixo).
+
+### Harness opcional sobre contratos reais (não versionado)
+`tests/application/test_harness_contratos_reais.py` roda o pipeline de
+ingestão+extração sobre uma pasta de PDFs reais fora do repositório (LGPD: os
+arquivos NUNCA são commitados). Uso local:
+```bash
+set CONTRATOS_REAIS_DIR=C:\caminho\para\contratos_reais
+pytest tests/application/test_harness_contratos_reais.py -s
+```
+Sem a variável definida, a suíte é ignorada (`skip`) automaticamente.
 
 ## Estrutura (arquitetura em camadas)
 ```
 src/contract_parser/
   domain/          # modelos + regras (IRRF, match, validação jurídica) — sem IO
-  application/     # casos de uso / serviços
-  infrastructure/  # MongoDB, OCR, LLM, exportação
-  presentation/    # GUI CustomTkinter
-tests/             # pytest (unit/integração/E2E)
+  application/     # casos de uso / serviços (orquestram domain + infra)
+  infrastructure/  # MongoDB, OCR, LLM (stub), exportação PDF/Excel, RFB (stub)
+  presentation/    # controllers/viewmodels (headless) + views CustomTkinter
+    views/         # widgets CustomTkinter (não testados por pytest sem display)
+tests/             # pytest — unit (domain), integração (application/infra),
+                   # E2E headless (presentation/controllers)
 ```
+
+## Escopo atual vs. backlog
+Entregue (RF01–RF06, CA-01, CA-03 a CA-06 — ver
+[checklist de aceite final](.agent/specs/checklist-aceite-final.md)):
+- Gestão de empresas (importação em lote + CRUD), ingestão PDF/DOCX + OCR,
+  extração híbrida (regras/regex) de partes/valores/vigência/reajuste, motor
+  de IRRF 2026 com memória de cálculo, match de portfólio (CNPJ + fuzzy),
+  flags jurídicas (Art. 18/37 da Lei 8.245/91), GUI CustomTkinter e exportação
+  PDF/Excel.
+
+Fora do escopo desta versão (decisão deliberada, não pendência esquecida):
+- **Docker/`docker-compose`** (CA-02) — adiado; app e MongoDB rodam nativos no
+  host Windows (ver ADR-001, decisão D2).
+- **Provedor de LLM externo** — adiado por LGPD (minimização de dados
+  sensíveis); o motor de extração é 100% determinístico (regras/regex) e o
+  `StubInterpretadorLLM` recusa-se a operar até um provedor ser escolhido e
+  aprovado. Campos ambíguos vão para revisão manual em vez de sair via LLM.
+  Consequência: `LLM_PROVIDER`/`LLM_API_KEY` no `.env` ficam vazios em
+  produção — não é uma variável esquecida.
+- **Redutor de IRRF da Lei nº 15.270/2025** — a fórmula/coeficientes exatos
+  ainda não foram validados na fonte oficial da RFB; o motor calcula apenas a
+  tabela progressiva padrão (o que o RF04/CA-03 exige). Ponto de extensão
+  documentado em `aplicar_redutor_15270` (`domain/irrf.py`), desligado por
+  padrão.
+- **Revalidação online da tabela IRRF contra a RFB** — o botão/fluxo é
+  suportado pela interface (`AtualizadorTabelaRFB`), mas o adaptador de
+  produção (`StubAtualizadorTabelaRFB`) ainda não integra rede; a aplicação
+  usa a última tabela persistida.
 
 ## Documentação viva (`.agent/specs/`)
 - [Plano de implementação](.agent/specs/contract-parser-implementation-plan.md)
 - [Requisitos & regras de negócio](.agent/specs/contract-parser-requirements.md)
 - [ADR-001 — Stack & Arquitetura](.agent/specs/adr-001-stack-e-arquitetura.md)
+- [Checklist de aceite final (CA-01 a CA-06)](.agent/specs/checklist-aceite-final.md)
 
 ## Roadmap (fases)
 0. ✅ Fundação, Requisitos & Governança
-1. Ambiente local + MongoDB
-2. Dados & Gestão de Empresas (RF01) — CA-01
-3. Ingestão & OCR (RF02)
-4. Extração NLP híbrida (RF03)
-5. Motor IRRF 2026 (RF04) — CA-03
-6. Match de portfólio (RF05) — CA-04
-7. GUI & Relatórios (RF06)
-8. QA, Segurança & Entrega
+1. ✅ Ambiente local + MongoDB
+2. ✅ Dados & Gestão de Empresas (RF01) — CA-01
+3. ✅ Ingestão & OCR (RF02)
+4. ✅ Extração NLP híbrida (RF03) — CA-05, CA-06
+5. ✅ Motor IRRF 2026 (RF04) — CA-03
+6. ✅ Match de portfólio (RF05) — CA-04
+7. ✅ GUI & Relatórios (RF06)
+8. ✅ QA, Segurança & Entrega — ver [checklist de aceite final](.agent/specs/checklist-aceite-final.md)

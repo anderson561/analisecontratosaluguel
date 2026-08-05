@@ -19,6 +19,7 @@ dependencies = [
 
 [project.scripts]
 contract-parser-envcheck = "contract_parser.infrastructure.environment_check:main"
+contract-parser-gui = "contract_parser.presentation.app:main"
 
 [project.optional-dependencies]
 dev = [

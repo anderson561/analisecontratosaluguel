@@ -23,6 +23,7 @@ from contract_parser.domain.interpretador import (
     PedidoInterpretacao,
     ResultadoInterpretacao,
 )
+from contract_parser.domain.irrf import TabelaIRRF, tabela_irrf_2026
 
 
 class FakeEmpresaRepository:
@@ -192,3 +193,30 @@ class FakeInterpretadorLLM:
         if self._resposta is None:
             return ResultadoInterpretacao(valor=None, confianca=0.0, justificativa="sem resposta")
         return self._resposta
+
+
+class FakeAtualizadorTabelaRFB:
+    """Revalidador FAKE (satisfaz ``AtualizadorTabelaRFB``) — sem rede.
+
+    Substitui o stub de produção (``StubAtualizadorTabelaRFB``) nos testes: NÃO
+    faz IO. Devolve uma ``tabela`` pré-programada (default: a factory oficial
+    2026) e conta as chamadas em ``chamadas`` — permite provar que a aplicação
+    aciona o revalidador. Se ``erro`` for dado, ``buscar_tabela_vigente`` o
+    levanta (simula falha de rede / stub sem integração).
+    """
+
+    def __init__(
+        self,
+        *,
+        tabela: TabelaIRRF | None = None,
+        erro: Exception | None = None,
+    ) -> None:
+        self._tabela = tabela if tabela is not None else tabela_irrf_2026()
+        self._erro = erro
+        self.chamadas = 0
+
+    def buscar_tabela_vigente(self) -> TabelaIRRF:
+        self.chamadas += 1
+        if self._erro is not None:
+            raise self._erro
+        return self._tabela

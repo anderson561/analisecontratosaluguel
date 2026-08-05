@@ -1,27 +1,36 @@
-"""Testes do ``TabelaIRRFRepository`` com coleção pymongo mockada (FakeCollection).
+"""Testes do ``TabelaIRRFRepository`` contra ``sqlite3.connect(":memory:")`` real.
 
-Não exigem MongoDB vivo. Um teste de integração real fica marcado com
-``@pytest.mark.integration`` (skip automático se o Mongo não responder).
+Desde a migração MongoDB -> SQLite (ADR-002), estes testes não exigem nenhum
+serviço externo. Preserva o cenário do CA-03 (tabela 2026 oficial persistida e
+recuperada, base R$ 5.000,00 PF->PJ = R$ 466,27) agora contra SQLite real.
 """
 from __future__ import annotations
 
+import sqlite3
 from datetime import date
 from decimal import Decimal
-from unittest.mock import MagicMock
 
 import pytest
 
-from contract_parser.domain.irrf import Faixa, TabelaIRRF, tabela_irrf_2026
-from contract_parser.infrastructure.tabela_irrf_repository import (
-    COLLECTION_NAME,
-    TabelaIRRFRepository,
-)
-from tests.support.fakes import FakeCollection
+from contract_parser.domain.contrato import TipoParte
+from contract_parser.domain.irrf import Faixa, TabelaIRRF, calcular_irrf, tabela_irrf_2026
+from contract_parser.infrastructure.database import init_schema
+from contract_parser.infrastructure.tabela_irrf_repository import TabelaIRRFRepository
+
+
+def _conexao() -> sqlite3.Connection:
+    conn = sqlite3.connect(":memory:")
+    init_schema(conn)
+    return conn
 
 
 @pytest.fixture
-def repo() -> TabelaIRRFRepository:
-    return TabelaIRRFRepository(collection=FakeCollection())
+def repo():
+    conn = _conexao()
+    try:
+        yield TabelaIRRFRepository(conn=conn)
+    finally:
+        conn.close()
 
 
 def _tabela(vigencia: str) -> TabelaIRRF:
@@ -57,6 +66,15 @@ def test_upsert_idempotente(repo):
     assert len(repo.list_all()) == 1
 
 
+def test_upsert_atualiza_campos_em_conflito(repo):
+    repo.upsert(_tabela("2026"))
+    atualizada = tabela_irrf_2026()
+    repo.upsert(atualizada)
+    obtida = repo.get_por_vigencia("2026")
+    assert obtida.faixas[-1].deducao == Decimal("908.73")
+    assert obtida.validado is True
+
+
 def test_get_vigente_retorna_mais_recente(repo):
     repo.upsert(_tabela("2024"))
     repo.upsert(_tabela("2026"))
@@ -76,45 +94,42 @@ def test_list_all_ordenada(repo):
     assert [t.vigencia for t in repo.list_all()] == ["2024", "2026"]
 
 
-def test_upsert_usa_replace_one_com_id_e_upsert():
-    """Verifica a interação com pymongo: replace_one por _id, upsert=True."""
-    collection = MagicMock()
-    repo = TabelaIRRFRepository(collection=collection)
-
+def test_documento_serializa_decimal_como_texto(repo):
+    """Decimal deve virar str na linha persistida (round-trip determinístico)."""
     repo.upsert(tabela_irrf_2026())
+    cur = repo._conn.execute(
+        "SELECT faixas FROM tabela_irrf WHERE vigencia = ?", ("2026",)
+    )
+    import json
 
-    collection.replace_one.assert_called_once()
-    args, kwargs = collection.replace_one.call_args
-    assert args[0] == {"_id": "2026"}
-    doc = args[1]
-    assert doc["_id"] == "2026"
-    assert kwargs.get("upsert") is True
-
-
-def test_documento_serializa_decimal_como_texto():
-    """Decimal deve virar str no documento (evita Decimal128/float no BSON)."""
-    collection = MagicMock()
-    repo = TabelaIRRFRepository(collection=collection)
-    repo.upsert(tabela_irrf_2026())
-    doc = collection.replace_one.call_args[0][1]
-    assert doc["faixas"][-1]["deducao"] == "908.73"  # string, não float
+    faixas = json.loads(cur.fetchone()["faixas"])
+    assert faixas[-1]["deducao"] == "908.73"  # string, não float
 
 
-@pytest.mark.integration
-def test_repositorio_real_roundtrip(require_mongo):
-    """Integração: upsert/get real contra o MongoDB (skip se indisponível)."""
-    from contract_parser.config import settings
-    from contract_parser.infrastructure.database import get_client
-
-    client = get_client()
-    collection = client[settings.mongo_db][f"{COLLECTION_NAME}_it_test"]
-    collection.delete_many({})
+# --------------------------------------------------------------------------- #
+# CA-03 — tabela IRRF 2026 oficial persistida/recuperada em SQLite real
+# --------------------------------------------------------------------------- #
+def test_ca03_tabela_2026_persistida_e_recuperada_em_sqlite_real():
+    """Persiste a tabela oficial 2026 em SQLite real (em memória), recupera via
+    ``get_vigente`` e confirma o cálculo do CA-03: base R$ 5.000,00, locador PF
+    -> locatário PJ, IRRF = R$ 466,27 (aplica a fórmula sobre a tabela
+    efetivamente lida do banco, não sobre a factory em memória)."""
+    conn = _conexao()
     try:
-        repo = TabelaIRRFRepository(collection=collection)
+        repo = TabelaIRRFRepository(conn=conn)
         repo.upsert(tabela_irrf_2026())
-        obtida = repo.get_vigente()
-        assert obtida is not None
-        assert obtida.vigencia == "2026"
-        assert obtida.faixas[-1].deducao == Decimal("908.73")
+
+        tabela_persistida = repo.get_vigente()
+        assert tabela_persistida is not None
+        assert tabela_persistida.vigencia == "2026"
+
+        resultado = calcular_irrf(
+            base_mensal=Decimal("5000.00"),
+            tipo_locador=TipoParte.PF,
+            tabela=tabela_persistida,
+        )
+
+        assert resultado.retido is True
+        assert resultado.imposto == Decimal("466.27")
     finally:
-        collection.drop()
+        conn.close()

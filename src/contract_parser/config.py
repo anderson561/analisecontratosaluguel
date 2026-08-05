@@ -1,6 +1,7 @@
 """Configuração central carregada de variáveis de ambiente (.env).
 
-Plumbing de infraestrutura — sem regra de negócio. Ver ADR-001.
+Plumbing de infraestrutura — sem regra de negócio. Ver ADR-001 e ADR-002
+(migração de persistência MongoDB → SQLite).
 """
 from __future__ import annotations
 
@@ -14,8 +15,7 @@ load_dotenv()
 
 @dataclass(frozen=True)
 class Settings:
-    mongo_uri: str = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-    mongo_db: str = os.getenv("MONGO_DB", "contract_parser")
+    database_path: str = os.getenv("DATABASE_PATH", "data/contract_parser.db")
     tesseract_cmd: str = os.getenv("TESSERACT_CMD", "")
     ocr_lang: str = os.getenv("OCR_LANG", "por")
     llm_provider: str = os.getenv("LLM_PROVIDER", "")

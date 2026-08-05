@@ -1,35 +1,43 @@
-"""Testes unitarios da camada de conexao MongoDB.
+"""Testes unitarios da camada de conexao SQLite.
 
-Nao exigem um MongoDB vivo: o pymongo/MongoClient e mockado.
+Rodam sempre contra ``sqlite3.connect(":memory:")`` — SQLite e embarcado na
+stdlib, entao nao ha skip condicional nem dependencia de servico externo
+(ADR-002: efeito colateral positivo da migracao MongoDB -> SQLite).
 """
 from __future__ import annotations
 
+import sqlite3
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
-from pymongo.errors import ServerSelectionTimeoutError
-
 from contract_parser.infrastructure import database
-from contract_parser.infrastructure.database import HealthResult, check_health
+from contract_parser.infrastructure.database import (
+    HealthResult,
+    RepositoryError,
+    check_health,
+    get_connection,
+    init_schema,
+    reset_connection,
+)
 
 
-def test_check_health_ok_com_client_injetado():
-    client = MagicMock()
-    client.admin.command.return_value = {"ok": 1.0}
+def test_check_health_ok_com_conexao_injetada():
+    conn = sqlite3.connect(":memory:")
+    try:
+        result = check_health(conn=conn)
 
-    result = check_health(client=client)
+        assert isinstance(result, HealthResult)
+        assert result.ok is True
+        assert "select 1" in result.detalhe.lower()
+    finally:
+        conn.close()
 
-    assert isinstance(result, HealthResult)
-    assert result.ok is True
-    assert "pong" in result.detalhe.lower()
-    client.admin.command.assert_called_once_with("ping")
 
+def test_check_health_falha_com_conexao_fechada():
+    conn = sqlite3.connect(":memory:")
+    conn.close()
 
-def test_check_health_falha_quando_pymongo_error():
-    client = MagicMock()
-    client.admin.command.side_effect = ServerSelectionTimeoutError("no servers")
-
-    result = check_health(client=client)
+    result = check_health(conn=conn)
 
     assert result.ok is False
     assert "inacessivel" in result.detalhe.lower()
@@ -38,74 +46,137 @@ def test_check_health_falha_quando_pymongo_error():
 
 
 def test_check_health_falha_generica_nao_propaga():
-    client = MagicMock()
-    client.admin.command.side_effect = RuntimeError("boom inesperado")
+    conn = MagicMock()
+    conn.execute.side_effect = RuntimeError("boom inesperado")
 
-    result = check_health(client=client)
+    result = check_health(conn=conn)
 
     assert result.ok is False
     assert "inesperada" in result.detalhe.lower()
 
 
-def test_check_health_usa_get_client_quando_sem_argumento():
-    fake_client = MagicMock()
-    fake_client.admin.command.return_value = {"ok": 1.0}
+def test_check_health_usa_get_connection_quando_sem_argumento():
+    fake_conn = sqlite3.connect(":memory:")
+    try:
+        with patch.object(database, "get_connection", return_value=fake_conn) as mock_get:
+            result = check_health()
 
-    with patch.object(database, "get_client", return_value=fake_client) as mock_get:
-        result = check_health()
-
-    assert result.ok is True
-    mock_get.assert_called_once()
-
-
-def test_get_client_e_singleton():
-    with patch.object(database, "MongoClient") as mock_mongo:
-        mock_mongo.side_effect = lambda *a, **k: MagicMock()
-        c1 = database.get_client()
-        c2 = database.get_client()
-
-    assert c1 is c2
-    # MongoClient instanciado uma unica vez (singleton)
-    assert mock_mongo.call_count == 1
+        assert result.ok is True
+        mock_get.assert_called_once()
+    finally:
+        fake_conn.close()
 
 
-def test_get_client_com_uri_explicita_nao_vira_singleton():
-    with patch.object(database, "MongoClient") as mock_mongo:
-        mock_mongo.side_effect = lambda *a, **k: MagicMock()
-        ad_hoc = database.get_client(uri="mongodb://outro:27017")
-        singleton = database.get_client()
+def test_init_schema_cria_tabelas_empresas_e_tabela_irrf():
+    conn = sqlite3.connect(":memory:")
+    try:
+        init_schema(conn)
 
-    assert ad_hoc is not singleton
-    assert mock_mongo.call_count == 2
-
-
-def test_get_client_aplica_timeout_curto():
-    with patch.object(database, "MongoClient") as mock_mongo:
-        database.get_client()
-
-    _, kwargs = mock_mongo.call_args
-    assert kwargs["serverSelectionTimeoutMS"] == database.DEFAULT_SERVER_SELECTION_TIMEOUT_MS
+        cur = conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        tabelas = {row[0] for row in cur.fetchall()}
+        assert "empresas" in tabelas
+        assert "tabela_irrf" in tabelas
+    finally:
+        conn.close()
 
 
-def test_reset_client_fecha_e_descarta():
-    with patch.object(database, "MongoClient") as mock_mongo:
-        instancia = MagicMock()
-        mock_mongo.return_value = instancia
-        database.get_client()
-        database.reset_client()
+def test_init_schema_e_idempotente():
+    conn = sqlite3.connect(":memory:")
+    try:
+        init_schema(conn)
+        init_schema(conn)  # segunda chamada nao deve levantar nem duplicar
 
-    instancia.close.assert_called_once()
-    assert database._client is None
+        cur = conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        tabelas = [row[0] for row in cur.fetchall()]
+        assert tabelas.count("empresas") == 1
+        assert tabelas.count("tabela_irrf") == 1
+    finally:
+        conn.close()
 
 
-def test_reset_client_idempotente():
-    database.reset_client()
+def test_init_schema_envolve_erro_sqlite_em_repository_error():
+    conn = sqlite3.connect(":memory:")
+    conn.close()
+
+    try:
+        init_schema(conn)
+    except RepositoryError as exc:
+        assert "schema" in str(exc).lower()
+    else:  # pragma: no cover - falha do teste, nao do codigo
+        raise AssertionError("init_schema deveria levantar RepositoryError em conexao fechada")
+
+
+def test_get_connection_e_singleton(tmp_path):
+    caminho = str(tmp_path / "singleton.db")
+    reset_connection()
+    with patch.object(database, "settings", SimpleNamespace(database_path=caminho)):
+        try:
+            c1 = get_connection()
+            c2 = get_connection()
+            assert c1 is c2
+        finally:
+            reset_connection()
+
+
+def test_get_connection_com_path_explicito_nao_vira_singleton(tmp_path):
+    caminho = str(tmp_path / "ad_hoc.db")
+    reset_connection()
+    with patch.object(database, "settings", SimpleNamespace(database_path=caminho)):
+        try:
+            ad_hoc = get_connection(database_path=":memory:")
+            singleton = get_connection()
+            assert ad_hoc is not singleton
+        finally:
+            ad_hoc.close()
+            reset_connection()
+
+
+def test_get_connection_aplica_pragma_foreign_keys():
+    conn = get_connection(database_path=":memory:")
+    try:
+        cur = conn.execute("PRAGMA foreign_keys")
+        assert cur.fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_get_connection_usa_row_factory():
+    conn = get_connection(database_path=":memory:")
+    try:
+        assert conn.row_factory is sqlite3.Row
+    finally:
+        conn.close()
+
+
+def test_get_connection_cria_diretorio_pai(tmp_path):
+    caminho = tmp_path / "subdir" / "novo.db"
+    assert not caminho.parent.exists()
+
+    conn = get_connection(database_path=str(caminho))
+    try:
+        assert caminho.parent.exists()
+    finally:
+        conn.close()
+
+
+def test_reset_connection_fecha_e_descarta(tmp_path):
+    caminho = str(tmp_path / "reset.db")
+    reset_connection()
+    with patch.object(database, "settings", SimpleNamespace(database_path=caminho)):
+        conn = get_connection()
+        reset_connection()
+
+    assert database._connection is None
+    # a conexao antiga foi fechada: qualquer uso deve falhar
+    try:
+        conn.execute("SELECT 1")
+    except sqlite3.ProgrammingError:
+        pass
+    else:  # pragma: no cover - falha do teste, nao do codigo
+        raise AssertionError("conexao deveria estar fechada apos reset_connection")
+
+
+def test_reset_connection_idempotente():
+    reset_connection()
     # segunda chamada nao deve levantar
-    database.reset_client()
-
-
-@pytest.mark.integration
-def test_ping_mongo_real(require_mongo):
-    """Integracao: exige MongoDB vivo (skip automatico via fixture require_mongo)."""
-    result = check_health()
-    assert result.ok is True
+    reset_connection()

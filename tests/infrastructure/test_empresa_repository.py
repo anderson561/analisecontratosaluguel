@@ -1,27 +1,37 @@
-"""Testes do ``EmpresaRepository`` com coleção pymongo mockada (FakeCollection).
+"""Testes do ``EmpresaRepository`` contra ``sqlite3.connect(":memory:")`` real.
 
-Não exigem MongoDB vivo. Um teste de integração real fica marcado com
-``@pytest.mark.integration`` (skip automático se o Mongo não responder).
+Desde a migração MongoDB -> SQLite (ADR-002), estes testes não exigem nenhum
+serviço externo: SQLite é embarcado na stdlib, sempre disponível.
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+import sqlite3
 
 import pytest
-from pymongo import UpdateOne
 
 from contract_parser.domain.empresa import Empresa
+from contract_parser.infrastructure.database import init_schema
 from contract_parser.infrastructure.empresa_repository import (
-    COLLECTION_NAME,
+    TABLE_NAME,
     EmpresaJaExisteError,
     EmpresaRepository,
 )
-from tests.support.fakes import FakeCollection
+from tests.support.fixture_builders import cnpj_valido_sequencial
+
+
+def _conexao() -> sqlite3.Connection:
+    conn = sqlite3.connect(":memory:")
+    init_schema(conn)
+    return conn
 
 
 @pytest.fixture
-def repo() -> EmpresaRepository:
-    return EmpresaRepository(collection=FakeCollection())
+def repo():
+    conn = _conexao()
+    try:
+        yield EmpresaRepository(conn=conn)
+    finally:
+        conn.close()
 
 
 def _empresa(cnpj: str = "11222333000181", razao: str = "Alpha LTDA") -> Empresa:
@@ -60,6 +70,13 @@ def test_update(repo):
     assert repo.get_by_cnpj("11222333000181").razao_social == "Alpha Nova"
 
 
+def test_update_nao_recria_created_at(repo):
+    original = repo.add(_empresa(razao="Alpha"))
+    repo.update(_empresa(razao="Alpha Nova"))
+    obtido = repo.get_by_cnpj("11222333000181")
+    assert obtido.created_at == original.created_at
+
+
 def test_remove(repo):
     repo.add(_empresa())
     assert repo.remove("11.222.333/0001-81") is True
@@ -77,45 +94,61 @@ def test_upsert_many_lista_vazia(repo):
     assert repo.upsert_many([]) == 0
 
 
-def test_upsert_many_constroi_updateone_com_upsert():
-    """Verifica a interação com pymongo: bulk_write recebe UpdateOne(upsert=True)."""
-    collection = MagicMock()
-    repo = EmpresaRepository(collection=collection)
-
+def test_upsert_many_atualiza_campos_em_conflito(repo):
     repo.upsert_many([_empresa("11222333000181", "Alpha")])
-
-    collection.bulk_write.assert_called_once()
-    ops, kwargs = collection.bulk_write.call_args
-    operacoes = ops[0]
-    assert len(operacoes) == 1
-    assert isinstance(operacoes[0], UpdateOne)
-    assert operacoes[0]._filter == {"_id": "11222333000181"}
-    assert operacoes[0]._upsert is True
-    assert kwargs.get("ordered") is False
+    repo.upsert_many([_empresa("11222333000181", "Alpha Renomeada")])
+    obtido = repo.get_by_cnpj("11222333000181")
+    assert obtido.razao_social == "Alpha Renomeada"
+    assert len(repo.list_all()) == 1
 
 
-def test_add_usa_document_com_id():
-    collection = MagicMock()
-    repo = EmpresaRepository(collection=collection)
+def test_aliases_e_nomes_fantasia_roundtrip_via_json(repo):
+    empresa = Empresa(
+        cnpj="11222333000181",
+        razao_social="Alpha LTDA",
+        aliases=["Alpha", "Alpha Comercio"],
+        nomes_fantasia=["AlphaCorp"],
+    )
+    repo.add(empresa)
+    obtido = repo.get_by_cnpj("11222333000181")
+    assert obtido.aliases == ["Alpha", "Alpha Comercio"]
+    assert obtido.nomes_fantasia == ["AlphaCorp"]
+
+
+def test_add_persiste_linha_na_tabela_empresas(repo):
     repo.add(_empresa())
-    doc = collection.insert_one.call_args[0][0]
-    assert doc["_id"] == "11222333000181"
+    cur = repo._conn.execute(f"SELECT cnpj FROM {TABLE_NAME} WHERE cnpj = ?", ("11222333000181",))
+    assert cur.fetchone() is not None
 
 
-@pytest.mark.integration
-def test_repositorio_real_roundtrip(require_mongo):
-    """Integração: CRUD real contra o MongoDB (skip se indisponível)."""
-    from contract_parser.config import settings
-    from contract_parser.infrastructure.database import get_client
+# --------------------------------------------------------------------------- #
+# CA-01 (equivalente de infraestrutura) — 50 empresas persistidas em SQLite real
+# --------------------------------------------------------------------------- #
+def test_ca01_50_empresas_persistidas_e_listadas_em_sqlite_real():
+    """Prova, contra SQLite real (em memória), que o repositório sustenta 50
+    empresas — mesmo cenário de volumetria do CA-01 (antes só validado com o
+    importador contra um fake in-memory; agora contra a implementação real de
+    infraestrutura pós-migração MongoDB -> SQLite, ADR-002)."""
+    conn = _conexao()
+    repo = EmpresaRepository(conn=conn)
+    lote = [
+        Empresa(
+            cnpj=cnpj_valido_sequencial(i + 1),
+            razao_social=f"Empresa Exemplo {i + 1:02d} LTDA",
+        )
+        for i in range(50)
+    ]
 
-    client = get_client()
-    collection = client[settings.mongo_db][f"{COLLECTION_NAME}_it_test"]
-    collection.delete_many({})
     try:
-        repo = EmpresaRepository(collection=collection)
-        repo.add(_empresa())
-        assert repo.get_by_cnpj("11222333000181") is not None
-        repo.upsert_many([_empresa("45566778000109", "Beta")])
-        assert len(repo.list_all()) == 2
+        processados = repo.upsert_many(lote)
+
+        assert processados == 50
+        todas = repo.list_all()
+        assert len(todas) == 50
+        assert {e.cnpj for e in todas} == {e.cnpj for e in lote}
+
+        # Reimportação idempotente: não duplica (mesma garantia exigida pelo CA-01).
+        repo.upsert_many(lote)
+        assert len(repo.list_all()) == 50
     finally:
-        collection.drop()
+        conn.close()

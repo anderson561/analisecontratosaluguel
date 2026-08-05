@@ -1,91 +1,148 @@
-"""Camada de conexão MongoDB (infraestrutura). Ver ADR-001 (D2-bis).
+"""Camada de conexão SQLite (infraestrutura). Ver ADR-002 (D2-bis revista).
 
 Plumbing puro: sem regra de negócio, sem dependência de application/presentation.
 Lê a configuração exclusivamente de ``config.settings``.
 
 Princípios SRE aplicados:
-- Timeout de seleção de servidor curto: falha rápido quando o Mongo está fora do ar
-  em vez de pendurar a UI/CLI por 30s (default do pymongo).
 - ``check_health`` NUNCA lança exceção: retorna um estado estruturado. Quem chama
   decide o que fazer (degradação graciosa).
-- ``reset_client`` permite graceful shutdown / fechamento explícito do pool.
+- ``reset_connection`` permite graceful shutdown / fechamento explícito do
+  singleton de processo (também usado para isolar testes).
+- ``RepositoryError`` é a exceção de infraestrutura agnóstica de motor: envolve
+  falhas de ``sqlite3`` antes de propagar às camadas superiores. Nenhuma exceção
+  de driver deve vazar para ``application``/``presentation`` (ADR-002 §2).
 """
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass
-
-from pymongo import MongoClient
-from pymongo.errors import PyMongoError
+from pathlib import Path
 
 from contract_parser.config import settings
 
-# Timeout curto (ms) de seleção de servidor. Falha rápido se o Mongo não estiver de pé.
-DEFAULT_SERVER_SELECTION_TIMEOUT_MS = 2000
+# Singleton de processo (reuso da conexão entre chamadas).
+_connection: sqlite3.Connection | None = None
 
-# Singleton de processo (reuso do pool de conexões entre chamadas).
-_client: MongoClient | None = None
+
+class RepositoryError(Exception):
+    """Erro de infraestrutura de persistência, agnóstico do motor de banco.
+
+    Introduzida pela migração MongoDB → SQLite (ADR-002): a camada de
+    apresentação deve capturar apenas este tipo, nunca exceções específicas de
+    driver (``sqlite3.Error`` hoje; ``PyMongoError`` ontem).
+    """
 
 
 @dataclass(frozen=True)
 class HealthResult:
     """Resultado estruturado de uma checagem de saúde do banco.
 
-    ``ok`` indica sucesso do ping; ``detalhe`` traz mensagem legível para log/CLI.
+    ``ok`` indica sucesso da checagem; ``detalhe`` traz mensagem legível para
+    log/CLI.
     """
 
     ok: bool
     detalhe: str
 
 
-def get_client(
-    uri: str | None = None,
-    *,
-    timeout_ms: int = DEFAULT_SERVER_SELECTION_TIMEOUT_MS,
-) -> MongoClient:
-    """Factory/singleton do ``MongoClient``.
+def _abrir_conexao(database_path: str) -> sqlite3.Connection:
+    """Abre uma conexão sqlite3 pronta para uso (schema à parte, ver ``init_schema``).
 
-    Sem ``uri`` explícita: usa ``settings.mongo_uri`` e reusa a mesma instância
-    (singleton de processo). Com ``uri`` explícita: cria uma conexão ad-hoc
-    (útil para testes de integração) sem afetar o singleton.
+    Cria o diretório pai do arquivo se ausente (exceto para ``:memory:``, que não
+    tem arquivo). ``check_same_thread=False`` porque a GUI (CustomTkinter) e a
+    aplicação single-user podem acessar a conexão fora da thread que a criou.
     """
-    global _client
-    if uri is not None:
-        return MongoClient(uri, serverSelectionTimeoutMS=timeout_ms)
-    if _client is None:
-        _client = MongoClient(settings.mongo_uri, serverSelectionTimeoutMS=timeout_ms)
-    return _client
+    if database_path != ":memory:":
+        Path(database_path).resolve().parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(database_path, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
 
 
-def reset_client() -> None:
+def get_connection(database_path: str | None = None) -> sqlite3.Connection:
+    """Factory/singleton da conexão sqlite3.
+
+    Sem ``database_path`` explícito: usa ``settings.database_path`` e reusa a
+    mesma instância (singleton de processo). Com ``database_path`` explícito:
+    cria uma conexão ad-hoc (útil para testes/composição alternativa) sem afetar
+    o singleton.
+    """
+    global _connection
+    if database_path is not None:
+        return _abrir_conexao(database_path)
+    if _connection is None:
+        _connection = _abrir_conexao(settings.database_path)
+    return _connection
+
+
+def reset_connection() -> None:
     """Fecha e descarta o singleton. Idempotente (seguro chamar múltiplas vezes).
 
     Usado em graceful shutdown e para isolar testes.
     """
-    global _client
-    if _client is not None:
-        _client.close()
-        _client = None
+    global _connection
+    if _connection is not None:
+        _connection.close()
+        _connection = None
 
 
-def check_health(client: MongoClient | None = None) -> HealthResult:
-    """Faz ``ping`` no MongoDB e retorna estado estruturado, sem lançar exceção.
+def init_schema(conn: sqlite3.Connection) -> None:
+    """Cria as tabelas ``empresas`` e ``tabela_irrf`` se ainda não existirem.
 
-    Passar ``client`` permite injetar um mock nos testes ou uma conexão ad-hoc.
+    ``CREATE TABLE IF NOT EXISTS`` — idempotente, sem migração versionada
+    (YAGNI para duas tabelas, ver ADR-002). Chamada tanto pela composição de
+    produção quanto pelos repositórios/testes, sem custo relevante em reexecução.
     """
     try:
-        conn = client if client is not None else get_client()
-        conn.admin.command("ping")
-    except PyMongoError as exc:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS empresas (
+                cnpj TEXT PRIMARY KEY,
+                razao_social TEXT NOT NULL,
+                aliases TEXT NOT NULL DEFAULT '[]',
+                nomes_fantasia TEXT NOT NULL DEFAULT '[]',
+                ativo INTEGER NOT NULL DEFAULT 1,
+                origem_import TEXT,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS tabela_irrf (
+                vigencia TEXT PRIMARY KEY,
+                faixas TEXT NOT NULL,
+                fonte_url TEXT NOT NULL,
+                base_legal TEXT NOT NULL,
+                validado INTEGER NOT NULL DEFAULT 0,
+                validado_em TEXT
+            );
+            """
+        )
+        conn.commit()
+    except sqlite3.Error as exc:
+        raise RepositoryError(f"Falha ao inicializar o schema do banco: {exc}") from exc
+
+
+def check_health(conn: sqlite3.Connection | None = None) -> HealthResult:
+    """Testa a conexão com ``SELECT 1`` e retorna estado estruturado.
+
+    NUNCA lança exceção. Passar ``conn`` permite injetar uma conexão específica
+    (testes ou ad-hoc); sem argumento, resolve o singleton via
+    :func:`get_connection`.
+    """
+    try:
+        conexao = conn if conn is not None else get_connection()
+        conexao.execute("SELECT 1").fetchone()
+    except sqlite3.Error as exc:
         return HealthResult(
             ok=False,
             detalhe=(
-                f"MongoDB inacessivel em {settings.mongo_uri}: {exc}. "
-                "Verifique se o servico MongoDB Community esta em execucao."
+                f"Banco SQLite inacessivel em {settings.database_path}: {exc}. "
+                "Verifique se o caminho do arquivo existe e e gravavel."
             ),
         )
     except Exception as exc:  # noqa: BLE001 - degradacao graciosa: nunca propagar
         return HealthResult(
             ok=False,
-            detalhe=f"Falha inesperada ao checar o MongoDB: {exc!r}",
+            detalhe=f"Falha inesperada ao checar o banco SQLite: {exc!r}",
         )
-    return HealthResult(ok=True, detalhe="MongoDB respondeu ao ping (pong).")
+    return HealthResult(ok=True, detalhe="Banco SQLite respondeu (SELECT 1 ok).")

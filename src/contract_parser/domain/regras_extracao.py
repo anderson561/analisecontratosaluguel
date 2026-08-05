@@ -72,14 +72,53 @@ _TERMOS_PJ = re.compile(
     r"ASSOCIA[ÇC][ÃA]O|CONDOM[ÍI]NIO|SOCIEDADE)\b",
     re.IGNORECASE,
 )
-_RE_LOCADOR = re.compile(
-    r"LOCADOR(?:A|\(A\))?\s*[:\-–]\s*(.{0,300}?)(?:\n\s*\n|LOCAT[ÁA]RI|\Z)",
-    re.IGNORECASE | re.DOTALL,
+
+# --- Rótulos das partes -----------------------------------------------------
+# Raiz do rótulo + gênero/plural. Cobre LOCADOR/LOCADORA/LOCADORES/LOCADORAS e
+# LOCATÁRIO/LOCATÁRIA/LOCATÁRIOS/LOCATÁRIAS (com ou sem acento no OCR).
+_RAIZ_LOCADOR = r"LOCADOR(?:ES|AS|A)?"
+_RAIZ_LOCATARIO = r"LOCAT[ÁA]RI(?:OS|AS|O|A)?"
+# Parentéticos de flexão que aparecem em layouts reais, um ou mais em sequência:
+# "(A)", "(A/S)", "(A/S/ES)", "(O/S) (A/S)" — capturados e descartados.
+_SUFIXO_ROTULO = r"(?:\s*\([^)\n]{0,15}\))*"
+# Separador rótulo→bloco (dois-pontos, hífen ou travessão).
+_SEP_ROTULO = r"\s*[:\-–]\s*"
+# Fim do bloco de qualificação: linha em branco, rótulo oposto ou cabeçalho de
+# seção. Ancorar aqui evita capturar o contrato inteiro. Limite de 800 chars
+# cobre blocos longos (nome + doc ficam sempre no início).
+_FRONTEIRAS = r"CL[ÁA]USULA|CLAUSULA|PAR[ÁA]GRAFO|PARTES\s+CONTRATANTES|OBJETO\b"
+
+
+def _re_rotulada(raiz: str, oposto: str) -> re.Pattern[str]:
+    return re.compile(
+        raiz + _SUFIXO_ROTULO + _SEP_ROTULO
+        + r"(.{1,800}?)"
+        + r"(?=\n[ \t]*\n|" + oposto + r"|" + _FRONTEIRAS + r"|\Z)",
+        re.IGNORECASE | re.DOTALL,
+    )
+
+
+_RE_LOCADOR = _re_rotulada(_RAIZ_LOCADOR, _RAIZ_LOCATARIO)
+_RE_LOCATARIO = _re_rotulada(_RAIZ_LOCATARIO, _RAIZ_LOCADOR)
+
+# Conectores narrativos ("de um lado, como LOCADORA e aqui doravante assim
+# denominada, <NOME> ...") descartados antes de isolar o nome. Generaliza o
+# estilo "considerandos" comum em contratos redigidos em prosa (sem quadro de
+# partes rotulado).
+_FILLER_NARRATIVA = re.compile(
+    r"^[\s,;:.–\-]*"
+    r"(?:como\s+)?"
+    r"(?:e\s+)?(?:aqui\s+)?(?:doravante\s+)?(?:assim\s+)?"
+    r"(?:denominad[oa]s?\s*[,;]?\s*)?"
+    r"(?:qualificad[oa]s?\s*[,;]?\s*)?"
+    r"(?:a\s+seguir\s+)?"
+    r"(?:o\s+|a\s+|os\s+|as\s+)?"
+    r"(?:sociedade\s+empres\w*\s+)?"
+    r"(?:pessoa\s+jur\w*(?:\s+de\s+direito\s+\w+)?\s+)?"
+    r"(?:empresa\s+)?",
+    re.IGNORECASE,
 )
-_RE_LOCATARIO = re.compile(
-    r"LOCAT[ÁA]RI(?:O|A|\(A\)|O\(A\))?\s*[:\-–]\s*(.{0,300}?)(?:\n\s*\n|LOCADOR|\Z)",
-    re.IGNORECASE | re.DOTALL,
-)
+
 # Corta o nome no primeiro marcador de qualificação.
 _CORTE_NOME = re.compile(
     r"[,;]|\bbrasileir|\bportador|\binscrit|\bCPF\b|\bCNPJ\b|\bnº|\bn\.º|\bresidente|\bcom sede",
@@ -93,8 +132,12 @@ def _parse_parte(bloco: str) -> ResultadoCampo[Parte]:
         return ResultadoCampo.nao_encontrado()
 
     corte = _CORTE_NOME.search(bloco)
-    nome = (bloco[: corte.start()] if corte else bloco).strip(" \t\n\r-–:.,")
-    nome = re.sub(r"\s+", " ", nome) or None
+    nome = (bloco[: corte.start()] if corte else bloco).strip(" \t\n\r-–—:.,;_/|")
+    nome = re.sub(r"\s+", " ", nome).strip()
+    # Nome precisa ter letras: blocos de assinatura ("LOCADOR: ______") ou linhas
+    # pontilhadas não são nomes — descarta para não mascarar a parte real.
+    if not nome or not re.search(r"[A-Za-zÀ-ÿ]", nome):
+        nome = None
 
     doc = detectar_documento(bloco)
     tipo: TipoParte | None = None
@@ -115,32 +158,93 @@ def _parse_parte(bloco: str) -> ResultadoCampo[Parte]:
     return ResultadoCampo(parte, confianca)
 
 
-def extrair_locador(texto: str) -> ResultadoCampo[Parte]:
-    m = _RE_LOCADOR.search(texto or "")
+def _extrair_narrativa(texto: str, raiz: str, oposto: str) -> ResultadoCampo[Parte] | None:
+    """Fallback em prosa: rótulo SEM separador seguido do nome/documento.
+
+    Estilo "considerandos" ("...como LOCADORA e aqui denominada, <NOME>, inscrita
+    no CNPJ..."). Menos determinístico que o quadro rotulado: teto de confiança
+    ``CONF_MEDIA`` e origem sinalizada para revisão preferencial. Nomes de PJ com
+    vírgulas internas podem sair truncados (limitação conhecida) — mas o par
+    PF/PJ + documento (crítico para o IRRF) é capturado com segurança.
+    """
+    m = re.search(r"\b" + raiz + r"\b(?!" + _SEP_ROTULO + r")", texto, re.IGNORECASE)
     if not m:
-        return ResultadoCampo.nao_encontrado("rótulo LOCADOR não encontrado")
-    return _parse_parte(m.group(1))
+        return None
+    janela = texto[m.end() : m.end() + 350]
+    # Não deixa o bloco vazar para a parte oposta.
+    mo = re.search(r"\b" + oposto + r"\b", janela, re.IGNORECASE)
+    if mo:
+        janela = janela[: mo.start()]
+    janela = _FILLER_NARRATIVA.sub("", janela, count=1)
+    res = _parse_parte(janela)
+    if res.valor is None:
+        return None
+    return ResultadoCampo(
+        res.valor, min(res.confianca, CONF_MEDIA), res.origem, "parte em redação narrativa"
+    )
+
+
+def _extrair_parte(
+    texto: str, regex: re.Pattern[str], raiz: str, oposto: str, rotulo: str
+) -> ResultadoCampo[Parte]:
+    """Quadro rotulado primeiro (D1 forte); prosa narrativa como fallback."""
+    texto = texto or ""
+    rotulada = None
+    m = regex.search(texto)
+    if m:
+        rotulada = _parse_parte(m.group(1))
+        if rotulada.resolvido:
+            return rotulada
+    narrativa = _extrair_narrativa(texto, raiz, oposto)
+    if narrativa is not None:
+        return narrativa
+    if rotulada is not None:
+        return rotulada
+    return ResultadoCampo.nao_encontrado(f"rótulo {rotulo} não encontrado")
+
+
+def extrair_locador(texto: str) -> ResultadoCampo[Parte]:
+    return _extrair_parte(texto, _RE_LOCADOR, _RAIZ_LOCADOR, _RAIZ_LOCATARIO, "LOCADOR")
 
 
 def extrair_locatario(texto: str) -> ResultadoCampo[Parte]:
-    m = _RE_LOCATARIO.search(texto or "")
-    if not m:
-        return ResultadoCampo.nao_encontrado("rótulo LOCATÁRIO não encontrado")
-    return _parse_parte(m.group(1))
+    return _extrair_parte(texto, _RE_LOCATARIO, _RAIZ_LOCATARIO, _RAIZ_LOCADOR, "LOCATÁRIO")
 
 
 # --------------------------------------------------------------------------- #
 # Tipo de locação (residencial × comercial) — pode ser ambíguo (fallback LLM)
 # --------------------------------------------------------------------------- #
-_RE_RESIDENCIAL = re.compile(r"\bresidencial\b|fins\s+residenciais|para\s+moradia", re.IGNORECASE)
+_RE_RESIDENCIAL = re.compile(
+    r"\bresidenci(?:al|ais)\b|para\s+moradia|fins?\s+de\s+moradia", re.IGNORECASE
+)
 _RE_COMERCIAL = re.compile(
-    r"\bcomercial\b|n[ãa]o\s+residencial|fins\s+comerciais|atividade\s+(?:empresarial|comercial)",
+    r"\bcomerci(?:al|ais)\b|n[ãa]o[-\s]residencial|fins?\s+(?:\w+\s+){0,2}comerci(?:al|ais)"
+    r"|atividade\s+(?:empresarial|comercial)|escrit[óo]rio",
+    re.IGNORECASE,
+)
+# Tipo declarado no TÍTULO/cabeçalho ("CONTRATO DE LOCAÇÃO RESIDENCIAL ...",
+# "INSTRUMENTO ... DE LOCAÇÃO COMERCIAL", "... PARA FINS RESIDENCIAIS"). O título
+# é sinal jurídico forte e PRECEDE o corpo — resolve casos em que o corpo cita a
+# outra palavra por acaso (ex.: contrato residencial que menciona "sala
+# comercial" ao descrever o imóvel).
+_RE_TITULO_TIPO = re.compile(
+    r"loca[çc][ãa]o\s+(?:para\s+fins\s+|com\s+fins\s+|de\s+fins\s+|para\s+)?"
+    r"(?P<tipo>residenci(?:al|ais)|comerci(?:al|ais)|n[ãa]o[-\s]residencial)",
     re.IGNORECASE,
 )
 
 
 def extrair_tipo_locacao(texto: str) -> ResultadoCampo[TipoLocacao]:
     t = texto or ""
+    # 1) Título/cabeçalho tem prioridade (âncora jurídica forte).
+    mt = _RE_TITULO_TIPO.search(t)
+    if mt:
+        rotulo = mt.group("tipo").lower()
+        if rotulo.startswith("comerci"):
+            return ResultadoCampo(TipoLocacao.COMERCIAL, CONF_ALTA, detalhe="tipo pelo título")
+        return ResultadoCampo(TipoLocacao.RESIDENCIAL, CONF_ALTA, detalhe="tipo pelo título")
+
+    # 2) Corpo do contrato (finalidade/uso).
     tem_res = bool(_RE_RESIDENCIAL.search(t))
     tem_com = bool(_RE_COMERCIAL.search(t))
     if tem_res and not tem_com:

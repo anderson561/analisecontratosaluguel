@@ -23,6 +23,21 @@ TODAS = (
     TIPO_AMBIGUO_PF_PF,
 )
 
+# Fixtures que reproduzem — 100% ANONIMIZADAS (nomes fictícios, CPF/CNPJ falsos
+# porém válidos em formato) — layouts reais que quebravam a extração de PARTES e
+# TIPO (Fase 4, endurecimento RF03):
+# - PARENTETICO: quadro "LOCADOR (A/S/ES):" com bloco após linha em branco e
+#   título "RESIDENCIAL" competindo com "sala comercial" no corpo (caso-guia 02).
+# - NARRATIVO: partes em prosa ("como LOCADORA ... LTDA ... CNPJ ...") sem quadro
+#   rotulado, com bloco de assinatura ao final para travar a regressão (caso 03).
+RESIDENCIAL_ROTULO_PARENTETICO_PF_PJ = "contrato_residencial_rotulo_parentetico_pf_pj.txt"
+COMERCIAL_NARRATIVO_PJ_PJ = "contrato_comercial_narrativo_pj_pj.txt"
+
+REAIS_ANONIMIZADAS = (
+    RESIDENCIAL_ROTULO_PARENTETICO_PF_PJ,
+    COMERCIAL_NARRATIVO_PJ_PJ,
+)
+
 
 def carregar_contrato(nome: str) -> str:
     """Lê o texto de uma fixture de contrato (UTF-8)."""

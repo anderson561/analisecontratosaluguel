@@ -19,6 +19,10 @@ from contract_parser.domain.cnpj import normalizar_cnpj
 from contract_parser.domain.documento_texto import DocumentoTexto
 from contract_parser.domain.empresa import Empresa
 from contract_parser.domain.extracao import ResultadoOcr
+from contract_parser.domain.interpretador import (
+    PedidoInterpretacao,
+    ResultadoInterpretacao,
+)
 
 
 class FakeEmpresaRepository:
@@ -159,3 +163,32 @@ class FakeOcr:
     def reconhecer(self, dados: bytes) -> ResultadoOcr:
         self.chamadas.append(dados)
         return self._resultado
+
+
+class FakeInterpretadorLLM:
+    """Interpretador de cláusula FAKE (satisfaz ``InterpretadorClausula``).
+
+    Substitui o LLM nos testes do orquestrador híbrido: NÃO faz IO nem importa
+    SDK. Registra em ``pedidos`` todos os :class:`PedidoInterpretacao` recebidos
+    — o que permite provar QUANDO o orquestrador recorre (ou não) ao LLM — e
+    devolve uma ``resposta`` pré-programada. Se ``erro`` for dado, ``interpretar``
+    o levanta (simula o stub de produção sem provedor / falha do backend).
+    """
+
+    def __init__(
+        self,
+        *,
+        resposta: ResultadoInterpretacao | None = None,
+        erro: Exception | None = None,
+    ) -> None:
+        self._resposta = resposta
+        self._erro = erro
+        self.pedidos: list[PedidoInterpretacao] = []
+
+    def interpretar(self, pedido: PedidoInterpretacao) -> ResultadoInterpretacao:
+        self.pedidos.append(pedido)
+        if self._erro is not None:
+            raise self._erro
+        if self._resposta is None:
+            return ResultadoInterpretacao(valor=None, confianca=0.0, justificativa="sem resposta")
+        return self._resposta

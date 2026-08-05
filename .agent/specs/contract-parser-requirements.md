@@ -8,7 +8,7 @@ Ler, interpretar e extrair dados críticos de contratos de locação em lote (PD
 
 ## 2. Atores e Permissões
 - **Operador (usuário único da GUI):** importa empresas, seleciona pasta de contratos, dispara processamento, revalida tabela IRRF, exporta relatórios.
-- **Sistema (engine headless):** OCR, extração NLP híbrida, cálculo IRRF, match de portfólio, persistência no MongoDB local.
+- **Sistema (engine headless):** OCR, extração NLP híbrida, cálculo IRRF, match de portfólio, persistência em SQLite local (arquivo embarcado — ver ADR-002).
 - *Sem multiusuário/autenticação nesta versão (app desktop local).*
 
 ## 3. Campos de Extração (RF03) — refinados pelo domínio jurídico
@@ -47,11 +47,11 @@ Além dos campos do PRD, o especialista de Direito Imobiliário exige capturar:
 - **CNPJ ausente/ilegível no contrato:** cair no match *fuzzy* por nome; se abaixo do score, status *Não Encontrado*.
 - **Cláusula de reajuste inválida** (periodicidade < 12m ou índice vedado): extrair mesmo assim + **flag de alerta jurídico**.
 - **Duas garantias no mesmo contrato:** extrair ambas + flag de violação do Art. 37.
-- **MongoDB local indisponível:** falha explícita com orientação (serviço parado).
+- **Arquivo do banco SQLite inacessível:** falha explícita com orientação (verificar permissão/caminho de `DATABASE_PATH`; ver ADR-002 — não é mais um serviço externo).
 - **Tabela IRRF desatualizada/sem conexão à RFB:** usar última versão persistida + avisar data de validade.
 
 ## 7. Critérios de Aceitação (rastreamento ao PRD)
-- [ ] **CA-01** — Importar `.xlsx` com 50 empresas → 50 documentos no Mongo + listagem na GUI.
+- [x] **CA-01** — Importar `.xlsx` com 50 empresas → 50 registros na tabela `empresas` (SQLite) + listagem na GUI. **Validado fim-a-fim com banco SQLite real** (migração ADR-002, M6).
 - [ ] ~~**CA-02** — Docker~~ → **DEFERIDO** (Docker fora do escopo; ambiente local nativo).
 - [ ] **CA-03** — Aluguel PF→PJ de R$ 5.000,00 → alíquota + dedução da tabela 2026 + memória de cálculo.
 - [ ] **CA-04** — Empresas A,B,C cadastradas; só A,B na pasta → status individual + alerta de ausência de C.

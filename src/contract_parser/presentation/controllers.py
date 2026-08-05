@@ -6,21 +6,22 @@ injeção de dependência e expõem métodos de alto nível que as views CustomT
 apenas disparam. **Este módulo NÃO importa ``customtkinter``/``tkinter``** — a
 suíte de testes roda sem display e sem a lib gráfica instalada.
 
-Princípios (ADR-001 + skills UX/Python):
-- **Degradação graciosa (§6):** falha de banco (``PyMongoError``) ou de arquivo
-  nunca derruba a UI — vira uma :class:`ControllerError` com mensagem legível que
-  a view exibe. ``status_conexao`` reporta o estado do Mongo sem lançar.
+Princípios (ADR-001 + ADR-002 + skills UX/Python):
+- **Degradação graciosa (§6):** falha de banco (``RepositoryError``) ou de
+  arquivo nunca derruba a UI — vira uma :class:`ControllerError` com mensagem
+  legível que a view exibe. ``status_conexao`` reporta o estado do banco SQLite
+  sem lançar.
 - **Reuso, não reimplementação:** a formatação pt-BR (R$/dd-mm-aaaa) e a montagem
   de relatórios/exportadores são REusadas da Fase 6/7A, não reescritas.
 - **Camadas:** presentation → application/infrastructure por injeção; nenhuma
-  regra de negócio é implementada aqui (só orquestração + apresentação).
+  regra de negócio é implementada aqui (só orquestração + apresentação). Desde
+  a migração ADR-002, esta camada captura apenas ``RepositoryError`` (nunca uma
+  exceção de driver de banco — antes ``PyMongoError``, hoje ``sqlite3.Error``).
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-
-from pymongo.errors import PyMongoError
 
 from contract_parser.application.contract_extraction_service import ExtratorContrato
 from contract_parser.application.document_ingestor import (
@@ -38,7 +39,7 @@ from contract_parser.domain.contrato import Contrato
 from contract_parser.domain.empresa import Empresa
 from contract_parser.domain.relatorio import LinhaContrato, Relatorio, ResumoConformidade
 from contract_parser.domain.repositories import EmpresaRepositoryProtocol
-from contract_parser.infrastructure.database import HealthResult, check_health
+from contract_parser.infrastructure.database import HealthResult, RepositoryError, check_health
 from contract_parser.infrastructure.report_exporters import (
     ExcelRelatorioExporter,
     PdfRelatorioExporter,
@@ -93,7 +94,7 @@ class LinhaPainel:
 
 @dataclass(frozen=True)
 class StatusConexao:
-    """Estado do MongoDB para o banner de status da GUI (nunca lança)."""
+    """Estado do banco de dados para o banner de status da GUI (nunca lança)."""
 
     ok: bool
     detalhe: str
@@ -147,15 +148,15 @@ class EmpresasController:
             return self._importer.importar(caminho)
         except ArquivoImportacaoError as exc:
             raise ControllerError(f"Não foi possível importar o arquivo: {exc}") from exc
-        except PyMongoError as exc:
-            raise ControllerError(_MSG_MONGO) from exc
+        except RepositoryError as exc:
+            raise ControllerError(_MSG_BANCO) from exc
 
     def empresas(self) -> list[Empresa]:
         """Portfólio cadastrado (modelos de domínio)."""
         try:
             return self._repo.list_all()
-        except PyMongoError as exc:
-            raise ControllerError(_MSG_MONGO) from exc
+        except RepositoryError as exc:
+            raise ControllerError(_MSG_BANCO) from exc
 
     def linhas_empresas(self) -> list[LinhaEmpresa]:
         """Portfólio já formatado para a tabela da GUI (ordenado por razão social)."""
@@ -180,8 +181,8 @@ class EmpresasController:
         """Cadastra manualmente uma empresa (validação/normalização no domínio)."""
         try:
             return self._service.adicionar(cnpj, razao_social, ativo=ativo)
-        except PyMongoError as exc:
-            raise ControllerError(_MSG_MONGO) from exc
+        except RepositoryError as exc:
+            raise ControllerError(_MSG_BANCO) from exc
         except Exception as exc:
             raise ControllerError(f"Dados inválidos ou empresa já existente: {exc}") from exc
 
@@ -197,8 +198,8 @@ class EmpresasController:
             return self._service.editar(cnpj, razao_social=razao_social, ativo=ativo)
         except KeyError as exc:
             raise ControllerError(f"Empresa não encontrada: {exc}") from exc
-        except PyMongoError as exc:
-            raise ControllerError(_MSG_MONGO) from exc
+        except RepositoryError as exc:
+            raise ControllerError(_MSG_BANCO) from exc
         except ValueError as exc:
             raise ControllerError(f"Dados inválidos: {exc}") from exc
 
@@ -206,13 +207,14 @@ class EmpresasController:
         """Remove uma empresa por CNPJ. Retorna ``True`` se removeu."""
         try:
             return self._service.remover(cnpj)
-        except PyMongoError as exc:
-            raise ControllerError(_MSG_MONGO) from exc
+        except RepositoryError as exc:
+            raise ControllerError(_MSG_BANCO) from exc
 
 
-_MSG_MONGO = (
-    "Sem conexão com o MongoDB. Verifique se o serviço MongoDB Community está "
-    "em execução (porta 27017) e tente novamente."
+_MSG_BANCO = (
+    "Sem conexão com o banco. Verifique se o arquivo do banco de dados é "
+    "acessível (permissão de leitura/escrita no caminho configurado) e tente "
+    "novamente."
 )
 
 
@@ -278,10 +280,10 @@ class RelatorioController:
         self._contratos = list(contratos)
         try:
             self._relatorio = self._service.montar(self._contratos)
-        except PyMongoError as exc:
+        except RepositoryError as exc:
             self._relatorio = None
             self._pares = []
-            raise ControllerError(_MSG_MONGO) from exc
+            raise ControllerError(_MSG_BANCO) from exc
         self._pares = list(zip(self._relatorio.contratos.linhas, self._contratos, strict=True))
 
     def tem_dados(self) -> bool:
@@ -391,7 +393,7 @@ class AppController:
     """ViewModel raiz: injeta o repositório e compõe os controllers das abas.
 
     Tudo é injetável (fakes nos testes; serviços reais em ``app.main``). A criação
-    do MongoDB NÃO é feita aqui — o repositório vem pronto de fora (degradação
+    do banco NÃO é feita aqui — o repositório vem pronto de fora (degradação
     graciosa: a GUI abre mesmo com o banco fora do ar).
     """
 
@@ -429,9 +431,9 @@ class AppController:
         return resultado
 
     def status_conexao(self) -> StatusConexao:
-        """Estado do MongoDB para o banner da GUI. NUNCA lança (degradação §6)."""
+        """Estado do banco de dados para o banner da GUI. NUNCA lança (degradação §6)."""
         try:
             health: HealthResult = self._health_fn()
             return StatusConexao(ok=health.ok, detalhe=health.detalhe)
         except Exception as exc:  # noqa: BLE001 - o banner de status jamais derruba a UI
-            return StatusConexao(ok=False, detalhe=f"Falha ao checar o MongoDB: {exc!r}")
+            return StatusConexao(ok=False, detalhe=f"Falha ao checar o banco de dados: {exc!r}")

@@ -4,7 +4,7 @@ Cobrem a lógica de apresentação SEM display e SEM customtkinter: importação
 CRUD de empresa, processamento de pasta (via fake ingestor + fixtures reais de
 contrato), montagem/filtragem do painel, exportação (para ``tmp_path``),
 conformidade com a mensagem exata do PRD, e a degradação graciosa quando o
-MongoDB não responde.
+banco de dados não responde.
 
 Dados 100% fictícios (sem PII real).
 """
@@ -14,7 +14,6 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from pymongo.errors import ServerSelectionTimeoutError
 
 from contract_parser.application.contract_extraction_service import ExtratorContrato
 from contract_parser.application.document_ingestor import (
@@ -25,7 +24,7 @@ from contract_parser.application.relatorio_service import RelatorioService
 from contract_parser.domain.contrato import Contrato, Parte, Reajuste, TipoParte
 from contract_parser.domain.documento_texto import DocumentoTexto
 from contract_parser.domain.empresa import Empresa
-from contract_parser.infrastructure.database import HealthResult
+from contract_parser.infrastructure.database import HealthResult, RepositoryError
 from contract_parser.infrastructure.report_exporters import (
     ExcelRelatorioExporter,
     PdfRelatorioExporter,
@@ -64,25 +63,25 @@ class FakeIngestor:
 
 
 class RepoQueFalha:
-    """Repositório que simula MongoDB fora do ar em toda operação de leitura."""
+    """Repositório que simula o banco de dados fora do ar em toda operação."""
 
     def list_all(self):
-        raise ServerSelectionTimeoutError("mongo down")
+        raise RepositoryError("banco de dados indisponivel")
 
     def add(self, empresa):
-        raise ServerSelectionTimeoutError("mongo down")
+        raise RepositoryError("banco de dados indisponivel")
 
     def get_by_cnpj(self, cnpj):
-        raise ServerSelectionTimeoutError("mongo down")
+        raise RepositoryError("banco de dados indisponivel")
 
     def update(self, empresa):
-        raise ServerSelectionTimeoutError("mongo down")
+        raise RepositoryError("banco de dados indisponivel")
 
     def remove(self, cnpj):
-        raise ServerSelectionTimeoutError("mongo down")
+        raise RepositoryError("banco de dados indisponivel")
 
     def upsert_many(self, empresas):
-        raise ServerSelectionTimeoutError("mongo down")
+        raise RepositoryError("banco de dados indisponivel")
 
 
 def _repo_portfolio() -> FakeEmpresaRepository:
@@ -344,10 +343,10 @@ def test_status_conexao_ok():
     assert status.ok is True
 
 
-def test_status_conexao_degrada_quando_mongo_indisponivel():
+def test_status_conexao_degrada_quando_banco_indisponivel():
     app = AppController(
         _repo_portfolio(),
-        health_fn=lambda: HealthResult(ok=False, detalhe="MongoDB inacessivel"),
+        health_fn=lambda: HealthResult(ok=False, detalhe="Banco SQLite inacessivel"),
     )
     status = app.status_conexao()
     assert status.ok is False

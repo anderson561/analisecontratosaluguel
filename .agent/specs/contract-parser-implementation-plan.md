@@ -4,6 +4,13 @@
 > **Autor:** PM/Orquestrador Global (V6) — documento estratégico, sem código
 > **Data:** 2026-08-04
 > **Stack alvo:** Python 3.11+ · MongoDB · PyQt6 *ou* CustomTkinter · Docker / Docker Compose · Tesseract OCR
+>
+> ⚠️ **Nota (2026-08-05):** este plano reflete as decisões de **Fase 0**
+> (2026-08-04). A decisão de banco (**D2-bis**, MongoDB) foi posteriormente
+> **revista pelo [ADR-002](adr-002-migracao-mongodb-sqlite.md)**: a persistência
+> real do projeto é **SQLite** embarcado, não MongoDB. As menções a "MongoDB"/
+> "coleção" abaixo são registro histórico da decisão original; o estado atual
+> está em ADR-002 e no [checklist de aceite final](checklist-aceite-final.md).
 
 ---
 
@@ -23,14 +30,14 @@ Estas decisões precisam de definição do usuário antes das fases indicadas. O
 |---|---------|--------|-----------|
 | **D1** | **Motor de extração (RF03):** LLM externo × NLP local × híbrido | ✅ **DECIDIDO** | **Híbrido:** regras/regex para campos determinísticos (valores, datas, CNPJ) + LLM apenas para cláusulas ambíguas |
 | **D2** | **Docker / conteinerização** | ✅ **DECIDIDO** | **Docker fica FORA do escopo por enquanto.** App e banco rodam nativamente no host. ⚠️ Ver **D2-bis** (impacto no MongoDB) e nota no CA-02 |
-| **D2-bis** | **Onde roda o MongoDB sem Docker?** (consequência de D2) | ✅ **DECIDIDO** | **MongoDB Community local no Windows** (serviço). Offline, dados sob controle do usuário, sem custo — alinhado à sensibilidade dos contratos (LGPD) |
+| **D2-bis** | **Onde roda o banco sem Docker?** (consequência de D2) | ✅ **DECIDIDO** (revisto) | Decisão original: **MongoDB Community local no Windows** (serviço). Offline, dados sob controle do usuário, sem custo — alinhado à sensibilidade dos contratos (LGPD). **Revisto em 2026-08-05 pelo [ADR-002](adr-002-migracao-mongodb-sqlite.md): SQLite embarcado**, sem serviço externo — mesma motivação de LGPD/offline, atrito de ambiente ainda menor |
 | **D3** | **Framework GUI** | ✅ **DECIDIDO** | **CustomTkinter** (MIT, leve) |
 | **D4** | **Chave de match (RF05):** CNPJ × Razão Social × aliases fuzzy | ⏳ **EM ABERTO** (default assumido) | **CNPJ normalizado como chave primária** + fallback fuzzy (Razão Social/aliases) com score de confiança |
 | **D5** | **Tabela IRRF 2026:** valores exatos de faixas/alíquotas/deduções | ⏳ **EM ABERTO** (data-driven) | Extrair da fonte oficial RFB no início da Fase 5 e **persistir versionada** no Mongo; nunca hardcodar |
 
 ---
 
-## 2. Modelo de dados (MongoDB) — visão macro
+## 2. Modelo de dados (MongoDB na concepção original; SQLite na implementação — ver ADR-002) — visão macro
 
 Coleções propostas (a detalhar pelo Python DS Architect via `data-architecture-spec`):
 

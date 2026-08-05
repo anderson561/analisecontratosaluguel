@@ -1,12 +1,15 @@
-"""Verificador de ambiente (infraestrutura) — Fase 1.
+"""Verificador de ambiente (infraestrutura) — Fase 1 (revisto na migracao ADR-002).
 
 Checa e reporta PASS/FAIL para os pre-requisitos do ambiente local (sem Docker):
 - Python >= 3.11
-- ``pymongo`` importavel E MongoDB acessivel (ping via camada ``database``)
+- Banco de dados SQLite: arquivo/diretorio gravavel e schema inicializavel
+  (ver ADR-002 — substitui a antiga checagem "MongoDB acessivel": SQLite e
+  embarcado na stdlib, nao ha servico externo a verificar)
 - Binario do Tesseract presente (via ``settings.tesseract_cmd`` ou PATH) e idioma ``por``
 
-Degrada graciosamente: se algo falta, reporta O QUE instalar; NUNCA tenta instalar
-software de sistema e NUNCA derruba o processo por excecao nao tratada.
+Degrada graciosamente: se algo falta, reporta O QUE instalar/corrigir; NUNCA
+tenta instalar software de sistema e NUNCA derruba o processo por excecao nao
+tratada.
 
 Executavel:
     python -m contract_parser.infrastructure.environment_check
@@ -21,7 +24,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from contract_parser.config import settings
-from contract_parser.infrastructure.database import HealthResult, check_health
+from contract_parser.infrastructure.database import RepositoryError, get_connection, init_schema
 
 MIN_PYTHON: tuple[int, int] = (3, 11)
 
@@ -52,28 +55,53 @@ def check_python(version: tuple[int, int] | None = None) -> CheckResult:
     )
 
 
-def check_mongo(health_fn: Callable[[], HealthResult] = check_health) -> CheckResult:
-    """Valida que ``pymongo`` importa E que o MongoDB responde ao ping."""
+def _abrir_e_inicializar_schema(database_path: str) -> None:
+    """Abre uma conexao ad-hoc no caminho dado e inicializa o schema.
+
+    Usa ``get_connection(database_path=...)`` (conexao ad-hoc, nao afeta o
+    singleton de producao) seguido de ``init_schema``. Fecha a conexao ao final
+    — esta funcao so serve para *verificar* que o caminho e utilizavel.
+    """
+    conn = get_connection(database_path=database_path)
     try:
-        import pymongo  # noqa: F401
-    except ImportError as exc:
+        init_schema(conn)
+    finally:
+        conn.close()
+
+
+def check_banco_dados(
+    database_path: str | None = None,
+    abrir_fn: Callable[[str], None] = _abrir_e_inicializar_schema,
+) -> CheckResult:
+    """Valida que o banco SQLite e gravavel: abre o arquivo e inicializa o schema.
+
+    Substitui a antiga checagem "MongoDB acessivel" (ADR-002): SQLite e
+    embarcado na stdlib (``sqlite3``), entao nao ha servico externo a checar —
+    basta o processo conseguir criar/abrir o arquivo em ``DATABASE_PATH`` e
+    aplicar o ``CREATE TABLE IF NOT EXISTS``. Na pratica, esta checagem quase
+    sempre passa (o unico jeito de falhar e permissao negada ou disco cheio).
+    """
+    path = database_path if database_path is not None else settings.database_path
+    try:
+        abrir_fn(path)
+    except RepositoryError as exc:
         return CheckResult(
-            "MongoDB",
+            "Banco de dados",
             False,
-            f"pacote pymongo nao importavel: {exc}.",
-            'Ative o venv e rode: pip install -e ".[dev]"',
+            f"Falha ao inicializar o schema do banco SQLite em '{path}': {exc}.",
+            "Verifique se o caminho tem permissao de escrita e tente novamente.",
         )
-    health = health_fn()
-    if health.ok:
-        return CheckResult("MongoDB", True, health.detalhe)
+    except OSError as exc:
+        return CheckResult(
+            "Banco de dados",
+            False,
+            f"Nao foi possivel abrir/criar o arquivo do banco SQLite em '{path}': {exc}.",
+            "Verifique se o diretorio configurado em DATABASE_PATH existe e e gravavel.",
+        )
     return CheckResult(
-        "MongoDB",
-        False,
-        health.detalhe,
-        (
-            "Instale o MongoDB Community e inicie o servico (porta 27017), "
-            "ou ajuste MONGO_URI no .env."
-        ),
+        "Banco de dados",
+        True,
+        f"Banco SQLite pronto em '{path}' (schema inicializado).",
     )
 
 
@@ -145,7 +173,7 @@ def check_tesseract(
 
 def run_all_checks() -> list[CheckResult]:
     """Executa todas as checagens. Cada checagem ja e defensiva internamente."""
-    return [check_python(), check_mongo(), check_tesseract()]
+    return [check_python(), check_banco_dados(), check_tesseract()]
 
 
 def format_report(results: Sequence[CheckResult]) -> str:

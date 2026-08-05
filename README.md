@@ -2,22 +2,24 @@
 
 Aplicação desktop para leitura, extração e auditoria de contratos de locação em lote (PDF/DOCX), cruzamento com portfólio de empresas, cálculo de IRRF e relatórios profissionais.
 
-## Stack (ver [ADR-001](.agent/specs/adr-001-stack-e-arquitetura.md))
-Python 3.11+ · MongoDB Community (local) · CustomTkinter · Tesseract OCR (por-BRA) · pydantic · pytest (TDD)
+## Stack (ver [ADR-001](.agent/specs/adr-001-stack-e-arquitetura.md) + [ADR-002](.agent/specs/adr-002-migracao-mongodb-sqlite.md))
+Python 3.11+ · SQLite (embarcado) · CustomTkinter · Tesseract OCR (por-BRA) · pydantic · pytest (TDD)
 
 > ⚠️ **Docker está fora do escopo desta versão.** Ambiente roda nativamente no host.
 
 ## Pré-requisitos (setup manual no Windows)
 1. **Python 3.11+**
-2. **MongoDB Community** instalado como serviço local (porta padrão 27017)
-3. **Tesseract-OCR** com pacote de idioma `por`
+2. **Tesseract-OCR** com pacote de idioma `por`
+
+O banco de dados é **SQLite** (arquivo local, embarcado na stdlib do Python) —
+não há serviço externo de banco para instalar ou manter em execução.
 
 ## Setup
 ```bash
 python -m venv .venv
 .venv\Scripts\activate
 pip install -e ".[dev]"
-copy .env.example .env   # ajuste MONGO_URI, TESSERACT_CMD, etc.
+copy .env.example .env   # ajuste DATABASE_PATH, TESSERACT_CMD, etc.
 ```
 
 ## Verificação de ambiente (Fase 1)
@@ -27,25 +29,29 @@ contract-parser-envcheck          # se o pacote foi instalado com pip install -e
 # ou, sem instalar o pacote:
 set PYTHONPATH=src && python -m contract_parser.infrastructure.environment_check
 ```
-Reporta PASS/FAIL para Python ≥ 3.11, MongoDB acessível e Tesseract (idioma `por`),
-com instruções do que instalar quando algo falta. Exit code 0 = tudo OK, 1 = há pendências.
+Reporta PASS/FAIL para Python ≥ 3.11, banco de dados SQLite gravável e Tesseract
+(idioma `por`), com instruções do que corrigir quando algo falta. Exit code 0 =
+tudo OK, 1 = há pendências. A checagem do banco é praticamente sempre PASS —
+SQLite é um arquivo, não um serviço; só falha em caso de permissão negada ou
+disco cheio no caminho configurado em `DATABASE_PATH`.
 
-### Instalação manual dos serviços de sistema (não automatizada)
+### Instalação manual do Tesseract (não automatizada)
 | Serviço | Instalação (Windows) | Como verificar |
 |---------|----------------------|----------------|
-| **MongoDB Community** | Instalador oficial como *serviço* (porta 27017) | `Get-Service MongoDB` (deve estar *Running*) ou `mongosh --eval "db.runCommand({ping:1})"` |
 | **Tesseract-OCR** | Instalador UB-Mannheim + pacote de idioma `por`; ajuste `TESSERACT_CMD` no `.env` | `tesseract --version` e `tesseract --list-langs` (deve listar `por`) |
 
 ## Como rodar a aplicação (GUI)
-Com o ambiente pronto (venv ativo, MongoDB rodando, `.env` configurado):
+Com o ambiente pronto (venv ativo, `.env` configurado):
 ```bash
 contract-parser-gui                # se o pacote foi instalado com pip install -e .
 # ou, sem instalar o pacote:
 set PYTHONPATH=src && python -m contract_parser.presentation.app
 ```
-A GUI abre mesmo com o MongoDB fora do ar (degradação graciosa — banner de
-status avisa e as abas que dependem do banco falham com mensagem amigável,
-sem derrubar o processo).
+O arquivo do banco SQLite (`DATABASE_PATH`) é criado automaticamente na
+primeira execução, se ainda não existir. Se o caminho configurado não for
+gravável, a GUI ainda abre (degradação graciosa — banner de status avisa e as
+abas que dependem do banco falham com mensagem amigável, sem derrubar o
+processo).
 
 ## Testes
 ```bash
@@ -53,11 +59,14 @@ pytest                          # suíte completa (unit + integração + E2E hea
 pytest -q --cov                 # com relatório de cobertura no terminal
 ruff check src tests            # lint (zero warnings é o padrão do projeto)
 ```
-Testes marcados `integration` (ex.: MongoDB vivo) fazem `skip` automático
-quando o serviço não está disponível — não é falha, é ambiente incompleto.
-Alguns skips são esperados em clone limpo/CI: MongoDB parado, `pytesseract`
-não instalado, provedor de LLM não configurado (decisão adiada, ver Backlog) e
-o harness de contratos reais (`CONTRATOS_REAIS_DIR` não definida — ver abaixo).
+Testes marcados `integration` (ex.: OCR real via Tesseract, provedor de LLM)
+fazem `skip` automático quando o recurso não está disponível — não é falha, é
+ambiente incompleto. Os testes de persistência (repositórios) NÃO precisam
+mais desse marker: rodam sempre, contra SQLite embarcado (`sqlite3`), sem
+nenhum serviço externo de pé (ver ADR-002). Alguns skips são esperados em
+clone limpo/CI: `pytesseract` não instalado, provedor de LLM não configurado
+(decisão adiada, ver Backlog) e o harness de contratos reais
+(`CONTRATOS_REAIS_DIR` não definida — ver abaixo).
 
 ### Harness opcional sobre contratos reais (não versionado)
 `tests/application/test_harness_contratos_reais.py` roda o pipeline de
@@ -74,7 +83,7 @@ Sem a variável definida, a suíte é ignorada (`skip`) automaticamente.
 src/contract_parser/
   domain/          # modelos + regras (IRRF, match, validação jurídica) — sem IO
   application/     # casos de uso / serviços (orquestram domain + infra)
-  infrastructure/  # MongoDB, OCR, LLM (stub), exportação PDF/Excel, RFB (stub)
+  infrastructure/  # SQLite, OCR, LLM (stub), exportação PDF/Excel, RFB (stub)
   presentation/    # controllers/viewmodels (headless) + views CustomTkinter
     views/         # widgets CustomTkinter (não testados por pytest sem display)
 tests/             # pytest — unit (domain), integração (application/infra),
@@ -91,8 +100,8 @@ Entregue (RF01–RF06, CA-01, CA-03 a CA-06 — ver
   PDF/Excel.
 
 Fora do escopo desta versão (decisão deliberada, não pendência esquecida):
-- **Docker/`docker-compose`** (CA-02) — adiado; app e MongoDB rodam nativos no
-  host Windows (ver ADR-001, decisão D2).
+- **Docker/`docker-compose`** (CA-02) — adiado; app e banco (SQLite) rodam
+  nativos no host Windows (ver ADR-001, decisão D2).
 - **Provedor de LLM externo** — adiado por LGPD (minimização de dados
   sensíveis); o motor de extração é 100% determinístico (regras/regex) e o
   `StubInterpretadorLLM` recusa-se a operar até um provedor ser escolhido e
@@ -113,11 +122,12 @@ Fora do escopo desta versão (decisão deliberada, não pendência esquecida):
 - [Plano de implementação](.agent/specs/contract-parser-implementation-plan.md)
 - [Requisitos & regras de negócio](.agent/specs/contract-parser-requirements.md)
 - [ADR-001 — Stack & Arquitetura](.agent/specs/adr-001-stack-e-arquitetura.md)
+- [ADR-002 — Migração de Persistência MongoDB → SQLite](.agent/specs/adr-002-migracao-mongodb-sqlite.md)
 - [Checklist de aceite final (CA-01 a CA-06)](.agent/specs/checklist-aceite-final.md)
 
 ## Roadmap (fases)
 0. ✅ Fundação, Requisitos & Governança
-1. ✅ Ambiente local + MongoDB
+1. ✅ Ambiente local + persistência (originalmente MongoDB; migrado para SQLite — ver ADR-002)
 2. ✅ Dados & Gestão de Empresas (RF01) — CA-01
 3. ✅ Ingestão & OCR (RF02)
 4. ✅ Extração NLP híbrida (RF03) — CA-05, CA-06

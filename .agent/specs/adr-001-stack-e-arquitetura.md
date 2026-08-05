@@ -1,6 +1,12 @@
 # ADR-001 — Stack e Arquitetura do AI Contract Parser
 
 > **Fase:** 0 · **Data:** 2026-08-04 · **Status:** Aceito
+>
+> ⚠️ **Nota (2026-08-05):** a decisão **D2-bis** abaixo (MongoDB Community
+> local) foi **revista pelo [ADR-002](adr-002-migracao-mongodb-sqlite.md)** —
+> a persistência passou a ser **SQLite** (embarcado na stdlib, sem serviço
+> externo). O restante desta decisão (D1, D2, D3, D4, D5 e a arquitetura em
+> camadas) permanece válido; apenas D2-bis foi substituída.
 
 ## 1. Contexto Técnico e Forças Tecnológicas
 App desktop para gestão de portfólio imobiliário que lê contratos (PDF/DOCX), extrai dados, calcula IRRF e cruza com um cadastro de empresas. Dados são **sensíveis** (contratos, CNPJs) → privacidade/LGPD é força dominante. PRD pedia Docker, mas o usuário retirou a conteinerização do escopo atual.

@@ -1,14 +1,16 @@
 """Testes unitarios do verificador de ambiente.
 
-Todas as dependencias externas (Mongo, binario Tesseract, PATH) sao injetadas/mockadas.
-Nenhum teste instala software nem exige servico real.
+Todas as dependencias externas (banco SQLite, binario Tesseract, PATH) sao
+injetadas/mockadas. Nenhum teste instala software nem exige servico externo —
+o SQLite e embarcado, entao a checagem de banco so precisa de um caminho de
+arquivo gravavel (``tmp_path``), sem nenhum servico de pe (ADR-002).
 """
 from __future__ import annotations
 
 from types import SimpleNamespace
 
 from contract_parser.infrastructure import environment_check as ec
-from contract_parser.infrastructure.database import HealthResult
+from contract_parser.infrastructure.database import RepositoryError
 from contract_parser.infrastructure.environment_check import CheckResult
 
 
@@ -27,17 +29,40 @@ def test_check_python_fail_abaixo_do_minimo():
     assert "3.11" in r.remediacao
 
 
-# --- MongoDB -----------------------------------------------------------------
-def test_check_mongo_pass_quando_health_ok():
-    r = ec.check_mongo(health_fn=lambda: HealthResult(ok=True, detalhe="pong"))
+# --- Banco de dados (SQLite) --------------------------------------------------
+def test_check_banco_dados_pass_com_arquivo_real(tmp_path):
+    caminho = str(tmp_path / "envcheck.db")
+    r = ec.check_banco_dados(database_path=caminho)
     assert r.ok is True
-    assert r.detalhe == "pong"
+    assert caminho in r.detalhe
 
 
-def test_check_mongo_fail_quando_health_falha_traz_remediacao():
-    r = ec.check_mongo(health_fn=lambda: HealthResult(ok=False, detalhe="sem servidor"))
+def test_check_banco_dados_usa_settings_quando_sem_argumento(monkeypatch, tmp_path):
+    caminho = str(tmp_path / "settings.db")
+    # ``settings`` e um dataclass frozen: substitui o objeto inteiro no modulo
+    # (nao um atributo) para simular um DATABASE_PATH diferente.
+    monkeypatch.setattr(ec, "settings", SimpleNamespace(database_path=caminho))
+    r = ec.check_banco_dados()
+    assert r.ok is True
+    assert caminho in r.detalhe
+
+
+def test_check_banco_dados_fail_quando_schema_falha_traz_remediacao():
+    def abrir_fn_explode(_path: str) -> None:
+        raise RepositoryError("falha ao inicializar o schema")
+
+    r = ec.check_banco_dados(database_path="qualquer.db", abrir_fn=abrir_fn_explode)
     assert r.ok is False
-    assert "MongoDB Community" in r.remediacao
+    assert "permissao de escrita" in r.remediacao
+
+
+def test_check_banco_dados_fail_quando_arquivo_nao_pode_ser_criado():
+    def abrir_fn_sem_permissao(_path: str) -> None:
+        raise OSError("Permission denied")
+
+    r = ec.check_banco_dados(database_path="qualquer.db", abrir_fn=abrir_fn_sem_permissao)
+    assert r.ok is False
+    assert "DATABASE_PATH" in r.remediacao
 
 
 # --- Tesseract ---------------------------------------------------------------
@@ -105,12 +130,12 @@ def test_check_tesseract_fail_quando_runner_lanca():
 def test_format_report_marca_pass_e_fail_e_acao():
     results = [
         CheckResult("Python", True, "ok"),
-        CheckResult("MongoDB", False, "caiu", "suba o servico"),
+        CheckResult("Banco de dados", False, "caiu", "corrija a permissao"),
     ]
     texto = ec.format_report(results)
     assert "[PASS] Python" in texto
-    assert "[FAIL] MongoDB" in texto
-    assert "-> Acao: suba o servico" in texto
+    assert "[FAIL] Banco de dados" in texto
+    assert "-> Acao: corrija a permissao" in texto
     assert "1/2 checagens OK" in texto
 
 
@@ -131,7 +156,7 @@ def test_main_retorna_1_quando_ha_falha(monkeypatch, capsys):
 
 
 def test_run_all_checks_retorna_tres_checagens(monkeypatch):
-    monkeypatch.setattr(ec, "check_mongo", lambda: CheckResult("MongoDB", True, "ok"))
+    monkeypatch.setattr(ec, "check_banco_dados", lambda: CheckResult("Banco de dados", True, "ok"))
     monkeypatch.setattr(ec, "check_tesseract", lambda: CheckResult("Tesseract", True, "ok"))
     results = ec.run_all_checks()
-    assert [r.nome for r in results] == ["Python", "MongoDB", "Tesseract"]
+    assert [r.nome for r in results] == ["Python", "Banco de dados", "Tesseract"]

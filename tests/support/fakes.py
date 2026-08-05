@@ -1,19 +1,17 @@
-"""Fakes de teste: repositório in-memory e coleção pymongo simulada.
+"""Fakes de teste: repositório in-memory usado pelos testes de application.
 
 - ``FakeEmpresaRepository``: implementa ``EmpresaRepositoryProtocol`` em memória.
   Usado nos testes de application (service/importer) e no cenário CA-01, sem
-  qualquer dependência de pymongo/MongoDB.
-- ``FakeCollection``: emula o subconjunto da API de ``pymongo.Collection`` usado
-  por ``EmpresaRepository`` (insert_one/find_one/find/replace_one/delete_one/
-  bulk_write), permitindo testar a infraestrutura sem um Mongo vivo.
+  qualquer dependência de banco real (nem SQLite, nem o extinto MongoDB).
+
+Nota (ADR-002): desde a migração MongoDB -> SQLite, ``EmpresaRepository`` (a
+implementação de infraestrutura) é testado contra ``sqlite3.connect(":memory:")``
+real (ver ``tests/infrastructure/test_empresa_repository.py``) — não precisa
+mais de um fake de baixo nível equivalente ao antigo ``pymongo.Collection``.
 """
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any
-
-from pymongo.errors import DuplicateKeyError
 
 from contract_parser.domain.cnpj import normalizar_cnpj
 from contract_parser.domain.documento_texto import DocumentoTexto
@@ -55,58 +53,6 @@ class FakeEmpresaRepository:
         for e in empresas:
             self._store[e.cnpj] = e
         return len(empresas)
-
-
-class FakeCollection:
-    """Emulação in-memory de ``pymongo.Collection`` (chave natural ``_id``)."""
-
-    def __init__(self) -> None:
-        self.store: dict[Any, dict] = {}
-
-    def insert_one(self, doc: dict) -> SimpleNamespace:
-        _id = doc["_id"]
-        if _id in self.store:
-            raise DuplicateKeyError(f"duplicate _id {_id}")
-        self.store[_id] = dict(doc)
-        return SimpleNamespace(inserted_id=_id)
-
-    def find_one(self, flt: dict) -> dict | None:
-        doc = self.store.get(flt.get("_id"))
-        return dict(doc) if doc is not None else None
-
-    def find(self, flt: dict | None = None) -> list[dict]:
-        return [dict(d) for d in self.store.values()]
-
-    def replace_one(self, flt: dict, doc: dict, upsert: bool = False) -> SimpleNamespace:
-        _id = flt["_id"]
-        existed = _id in self.store
-        if existed or upsert:
-            self.store[_id] = dict(doc)
-        return SimpleNamespace(
-            matched_count=1 if existed else 0,
-            modified_count=1 if existed else 0,
-        )
-
-    def delete_one(self, flt: dict) -> SimpleNamespace:
-        _id = flt["_id"]
-        existed = _id in self.store
-        if existed:
-            del self.store[_id]
-        return SimpleNamespace(deleted_count=1 if existed else 0)
-
-    def bulk_write(self, operations: list, ordered: bool = True) -> SimpleNamespace:
-        upserts = 0
-        for op in operations:
-            flt = op._filter
-            _id = flt["_id"]
-            update = op._doc
-            set_doc = update.get("$set", update)
-            if _id not in self.store:
-                upserts += 1
-            base = self.store.get(_id, {})
-            base.update(set_doc)
-            self.store[_id] = dict(base)
-        return SimpleNamespace(upserted_count=upserts, modified_count=len(operations) - upserts)
 
 
 class FakeExtractor:

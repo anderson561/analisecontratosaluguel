@@ -58,7 +58,7 @@ class MainWindow(ctk.CTk):
         self._recarregar_empresas()
 
     # ------------------------------------------------------------------ #
-    # Banner de status (conexão MongoDB)
+    # Banner de status (conexão com o banco de dados SQLite)
     # ------------------------------------------------------------------ #
     def _construir_banner_status(self) -> None:
         self._banner = ctk.CTkLabel(self, text="", anchor="w", height=32)
@@ -68,7 +68,7 @@ class MainWindow(ctk.CTk):
         status = self._c.status_conexao()
         icone = "✓" if status.ok else "⚠"
         cor = _COR_OK if status.ok else _COR_ERRO
-        prefixo = "Conectado ao MongoDB" if status.ok else "Sem conexão com o banco"
+        prefixo = "Banco de dados OK" if status.ok else "Sem conexão com o banco"
         self._banner.configure(text=f"{icone}  {prefixo} — {status.detalhe}", text_color=cor)
 
     # ------------------------------------------------------------------ #

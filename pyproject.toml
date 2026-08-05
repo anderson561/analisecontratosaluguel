@@ -4,7 +4,6 @@ version = "0.1.0"
 description = "Leitor Inteligente de Contratos de Locação (AI Contract Parser)"
 requires-python = ">=3.11"
 dependencies = [
-    "pymongo>=4.7",
     "pydantic>=2.7",
     "pytesseract>=0.3.10",
     "pillow>=10.0",
@@ -40,7 +39,7 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-ra --cov=contract_parser --cov-report=term-missing"
 markers = [
-    "integration: testes que exigem servicos reais (ex.: MongoDB vivo); skip automatico se indisponivel",
+    "integration: testes que exigem recursos reais externos ao codigo (ex.: pytesseract instalado, provedor de LLM configurado, lote de contratos reais via CONTRATOS_REAIS_DIR); skip automatico se indisponivel",
 ]
 
 [tool.ruff]

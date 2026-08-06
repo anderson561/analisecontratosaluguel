@@ -112,7 +112,8 @@ def test_documento_serializa_decimal_como_texto(repo):
 def test_ca03_tabela_2026_persistida_e_recuperada_em_sqlite_real():
     """Persiste a tabela oficial 2026 em SQLite real (em memória), recupera via
     ``get_vigente`` e confirma o cálculo do CA-03: base R$ 5.000,00, locador PF
-    -> locatário PJ, IRRF = R$ 466,27 (aplica a fórmula sobre a tabela
+    -> locatário PJ, tabela padrão R$ 466,27 reduzida a R$ 153,38 pelo redutor
+    da Lei nº 15.270/2025 (ADR-003) — aplica a fórmula sobre a tabela
     efetivamente lida do banco, não sobre a factory em memória)."""
     conn = _conexao()
     try:
@@ -130,6 +131,7 @@ def test_ca03_tabela_2026_persistida_e_recuperada_em_sqlite_real():
         )
 
         assert resultado.retido is True
-        assert resultado.imposto == Decimal("466.27")
+        assert resultado.imposto_antes_reducao == Decimal("466.27")
+        assert resultado.imposto == Decimal("153.38")
     finally:
         conn.close()

@@ -85,7 +85,8 @@ def test_relatorio01_uma_linha_por_contrato_na_ordem_de_entrada():
 
 
 def test_ca03_irrf_pf_pj_base_5000():
-    """Aluguel PF→PJ de R$ 5.000,00 → IRRF 466,27 (0,275 − 908,73)."""
+    """Aluguel PF→PJ de R$ 5.000,00 → tabela 466,27 (0,275 − 908,73) reduzida
+    a R$ 153,38 pelo redutor da Lei nº 15.270/2025 (ADR-003)."""
     relatorio = RelatorioService(_repo()).montar([_contrato_pf_pj()])
     linha = relatorio.contratos.linhas[0]
 
@@ -93,7 +94,8 @@ def test_ca03_irrf_pf_pj_base_5000():
     assert linha.irrf.retido is True
     assert linha.irrf.aliquota == Decimal("0.275")
     assert linha.irrf.deducao == Decimal("908.73")
-    assert linha.irrf_retido == Decimal("466.27")
+    assert linha.irrf.imposto_antes_reducao == Decimal("466.27")
+    assert linha.irrf_retido == Decimal("153.38")
     assert linha.dados_incompletos is False
 
 
@@ -109,8 +111,8 @@ def test_locador_pj_gera_irrf_zero():
 def test_total_irrf_retido_soma_as_linhas():
     contratos = [_contrato_pf_pj(), _contrato_locador_pj()]
     relatorio = RelatorioService(_repo()).montar(contratos)
-    # 466,27 (PF) + 0,00 (PJ) = 466,27.
-    assert relatorio.contratos.total_irrf_retido == Decimal("466.27")
+    # 153,38 (PF, já com o redutor da Lei nº 15.270/2025) + 0,00 (PJ) = 153,38.
+    assert relatorio.contratos.total_irrf_retido == Decimal("153.38")
 
 
 def test_contrato_sem_valor_de_aluguel_nao_calcula_irrf():

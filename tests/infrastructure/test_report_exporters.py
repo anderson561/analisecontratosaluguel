@@ -114,7 +114,8 @@ def test_excel_gera_duas_abas_com_cabecalhos_e_valores(tmp_path):
     # Primeira linha de dados: Alpha, valor e IRRF formatados em pt-BR.
     assert contratos["A2"].value == "Alpha Comercio LTDA"
     assert contratos["D2"].value == "R$ 5.000,00"
-    assert contratos["E2"].value == "R$ 466,27"
+    # 466,27 (tabela) reduzido a 153,38 pelo redutor da Lei nº 15.270/2025 (ADR-003).
+    assert contratos["E2"].value == "R$ 153,38"
     assert contratos["H2"].value == "Sim"
     assert contratos["I2"].value == "10/10/2028"
     # Locador PJ ⇒ IRRF R$ 0,00.
@@ -157,7 +158,8 @@ def test_pdf_gera_arquivo_nao_trivial_com_texto_esperado(tmp_path):
         doc.close()
     assert "Relatório de Contratos de Locação" in texto
     assert "Alpha Comercio LTDA" in texto
-    assert "R$ 466,27" in texto
+    # 466,27 (tabela) reduzido a 153,38 pelo redutor da Lei nº 15.270/2025 (ADR-003).
+    assert "R$ 153,38" in texto
     assert PENDENCIA in texto
 
 

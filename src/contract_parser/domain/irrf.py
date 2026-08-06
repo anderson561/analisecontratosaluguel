@@ -19,15 +19,16 @@ Regras de negócio (§4 dos requisitos, D5 do ADR-001):
 Base 2026: Lei nº 15.191/2025, vigência a partir de jan/2026 (ver
 :func:`tabela_irrf_2026`). Valores fornecidos pela RFB via PM/Orquestrador.
 
-Ponto de extensão — Redutor da Lei nº 15.270/2025 (NÃO implementado):
-    A fonte oficial cita uma **redução progressiva** do IRRF para rendimentos
-    mensais de até R$ 7.350,00 (Lei 15.270/2025), aplicada *após* a tabela
-    progressiva padrão. Este módulo implementa apenas a tabela progressiva
-    PADRÃO (o que o RF04 pede). A fórmula exata do redutor ainda **precisa ser
-    validada na fonte legal** antes de ser ativada — ver ``aplicar_redutor_15270``
-    (stub documentado) e o relatório de entrega da Fase 5. O redutor NÃO integra
-    o escopo do RF04 e permanece **desligado por padrão**: o resultado do CA-03
-    (base R$ 5.000,00) é a tabela progressiva padrão, sem redutor.
+Redutor da Lei nº 15.270/2025 (Art. 3º-A da Lei nº 9.250/1995) — ATIVO:
+    A partir de jan/2026, uma **redução adicional** é aplicada sobre o imposto
+    já calculado pela tabela progressiva padrão, para rendimentos mensais de
+    até R$ 7.350,00 (:func:`calcular_reducao_lei_15270`). ``calcular_irrf``
+    aplica essa redução automaticamente (Locador PF), antes do arredondamento
+    final. A fórmula, a fonte legal e os exemplos numéricos de conferência
+    estão documentados em ``.agent/specs/adr-003-redutor-irrf-2026.md``
+    (decisão registrada: aluguel não tem direito ao desconto simplificado que
+    o salário tem, então o CA-03 em base R$ 5.000,00 é R$ 153,38 — não R$ 0,00
+    nem R$ 466,27).
 """
 from __future__ import annotations
 
@@ -143,6 +144,11 @@ class ResultadoIRRF(BaseModel):
     base_legal: str
     fonte_url: str
     observacao: str = ""
+    # Memória de cálculo do redutor da Lei nº 15.270/2025 (ADR-003): o imposto
+    # da tabela padrão ANTES da redução e o valor efetivamente reduzido.
+    # `imposto == imposto_antes_reducao - reducao_aplicada` sempre que retido.
+    imposto_antes_reducao: Decimal = _ZERO
+    reducao_aplicada: Decimal = _ZERO
 
 
 def calcular_irrf(
@@ -163,10 +169,10 @@ def calcular_irrf(
     tabela:
         :class:`TabelaIRRF` vigente (injetada pela infraestrutura).
 
-    Ponto de extensão (Lei 15.270/2025): o redutor progressivo para rendimentos
-    ≤ R$ 7.350 seria aplicado ao ``imposto`` calculado abaixo, antes do
-    arredondamento final — ver :func:`aplicar_redutor_15270`. Mantido desligado
-    até validação da fonte legal (RF04 pede apenas a tabela progressiva padrão).
+    Redutor da Lei nº 15.270/2025: para Locador PF, o redutor progressivo para
+    rendimentos ≤ R$ 7.350,00 (:func:`calcular_reducao_lei_15270`) é aplicado
+    sobre o imposto da tabela padrão, antes do arredondamento final. Ver
+    ADR-003 para a fórmula e os valores de referência.
     """
     base = _arredondar_moeda(base_mensal)
 
@@ -186,18 +192,32 @@ def calcular_irrf(
                 "IRRF não retido: aluguel pago a locador PJ não sofre retenção "
                 "nesta modalidade (RF04)."
             ),
+            imposto_antes_reducao=_ZERO,
+            reducao_aplicada=_ZERO,
         )
 
     faixa = tabela.faixa_para(base)
     bruto = base * faixa.aliquota - faixa.deducao
     # Nunca negativo (faixa isenta ou arredondamento de fronteira).
-    imposto = _arredondar_moeda(max(_ZERO, bruto))
+    imposto_antes_reducao = _arredondar_moeda(max(_ZERO, bruto))
 
-    observacao = (
-        "Faixa isenta: IRRF = R$ 0,00."
-        if faixa.isenta
-        else f"IRRF = {base} × {faixa.aliquota} − {faixa.deducao} = {imposto}."
-    )
+    # Redutor da Lei nº 15.270/2025 (Art. 3º-A) — aplicado ao imposto já
+    # calculado pela tabela padrão, nunca gera imposto negativo (ADR-003).
+    reducao_teorica = calcular_reducao_lei_15270(base)
+    imposto = _arredondar_moeda(max(_ZERO, imposto_antes_reducao - reducao_teorica))
+    reducao_aplicada = imposto_antes_reducao - imposto
+
+    if faixa.isenta:
+        observacao = "Faixa isenta: IRRF = R$ 0,00."
+    elif reducao_aplicada > _ZERO:
+        observacao = (
+            f"IRRF = {base} × {faixa.aliquota} − {faixa.deducao} = "
+            f"{imposto_antes_reducao}; reduzido em {reducao_aplicada} pela "
+            f"Lei nº 15.270/2025 → {imposto}."
+        )
+    else:
+        observacao = f"IRRF = {base} × {faixa.aliquota} − {faixa.deducao} = {imposto}."
+
     return ResultadoIRRF(
         retido=imposto > 0,
         imposto=imposto,
@@ -209,25 +229,41 @@ def calcular_irrf(
         base_legal=tabela.base_legal,
         fonte_url=tabela.fonte_url,
         observacao=observacao,
+        imposto_antes_reducao=imposto_antes_reducao,
+        reducao_aplicada=reducao_aplicada,
     )
 
 
-def aplicar_redutor_15270(imposto: Decimal, base_mensal: Decimal) -> Decimal:
-    """PONTO DE EXTENSÃO — Redutor da Lei nº 15.270/2025 (NÃO implementado).
+_TETO_REDUCAO_INTEGRAL = Decimal("5000.00")
+_TETO_REDUCAO_PROGRESSIVA = Decimal("7350.00")
+_REDUCAO_MAXIMA = Decimal("312.89")
+_REDUCAO_COEFICIENTE_FIXO = Decimal("978.62")
+_REDUCAO_COEFICIENTE_LINEAR = Decimal("0.133145")
 
-    A fonte oficial da RFB cita uma redução progressiva do IRRF para rendimentos
-    mensais de até R$ 7.350,00. A fórmula/coeficientes exatos ainda **não foram
-    validados na fonte legal** e, portanto, o redutor permanece DESLIGADO — o
-    RF04 exige apenas a tabela progressiva padrão.
 
-    Quando validado, este é o único ponto a alterar: aplicar o redutor ao
-    ``imposto`` (para ``base_mensal <= 7350``) antes do arredondamento final em
-    :func:`calcular_irrf`. Até lá, é *no-op* (retorna o imposto inalterado) e não
-    é chamado por :func:`calcular_irrf`.
+def calcular_reducao_lei_15270(rendimento: Decimal) -> Decimal:
+    """Redutor de IRRF da Lei nº 15.270/2025 (Art. 3º-A da Lei nº 9.250/1995).
 
-    TODO(Fase 5+): validar coeficientes da Lei 15.270/2025 na RFB e ativar.
+    Redução do imposto mensal, calculada sobre o **rendimento tributável**
+    (aqui, ``base_mensal`` do aluguel — sem desconto simplificado prévio, que
+    não se aplica a esta modalidade; ver ADR-003 §3):
+
+    - ``rendimento <= R$ 5.000,00``: redução fixa de R$ 312,89.
+    - ``R$ 5.000,01 <= rendimento <= R$ 7.350,00``:
+      ``978,62 − (0,133145 × rendimento)`` (decrescente até zerar em R$ 7.350).
+    - ``rendimento > R$ 7.350,00``: sem redução (R$ 0,00).
+
+    Retorna o valor **teórico** da tabela do Art. 3º-A — quem garante que o
+    imposto final nunca fica negativo é :func:`calcular_irrf` (``max(0, ...)``,
+    §1º do artigo). Fonte e exemplos de conferência:
+    ``.agent/specs/adr-003-redutor-irrf-2026.md``.
     """
-    return imposto
+    if rendimento <= _TETO_REDUCAO_INTEGRAL:
+        return _REDUCAO_MAXIMA
+    if rendimento <= _TETO_REDUCAO_PROGRESSIVA:
+        bruto = _REDUCAO_COEFICIENTE_FIXO - (_REDUCAO_COEFICIENTE_LINEAR * rendimento)
+        return _arredondar_moeda(max(_ZERO, bruto))
+    return _ZERO
 
 
 def tabela_irrf_2026() -> TabelaIRRF:

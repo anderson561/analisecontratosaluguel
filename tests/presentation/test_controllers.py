@@ -293,7 +293,8 @@ def test_linhas_painel_formatadas_ptbr():
     assert linha.locatario == "Alpha Comercio LTDA"
     assert linha.locador == "João da Silva"
     assert linha.valor == "R$ 5.000,00"
-    assert linha.irrf == "R$ 466,27"
+    # 466,27 (tabela) reduzido a 153,38 pelo redutor da Lei nº 15.270/2025 (ADR-003).
+    assert linha.irrf == "R$ 153,38"
     assert linha.indice == "IPCA"
     assert linha.automatico == "Sim"
     assert linha.vencimento == "10/10/2028"

@@ -71,10 +71,12 @@ def test_pipeline_completo_ingestao_a_painel_e_conformidade():
     app.processar_pasta("qualquer/pasta")
 
     # Fase 4+5: aluguel R$ 3.500,00, locador PF -> locatário PJ cai na faixa
-    # 15% / dedução 394,16 da tabela 2026: 3500*0.15 - 394.16 = 130.84.
+    # 15% / dedução 394,16 da tabela 2026: 3500*0.15 - 394.16 = 130,84 (tabela
+    # padrão). Rendimento <= R$5.000 -> redutor da Lei nº 15.270/2025 zera o
+    # imposto (ADR-003): 130,84 - 312,89 -> max(0, ...) = 0,00.
     linha = app.relatorio.linhas_painel()[0]
     assert linha.locatario == "Comércio de Alimentos Boa Mesa LTDA"
-    assert linha.irrf == "R$ 130,84"
+    assert linha.irrf == "R$ 0,00"
     assert linha.revisao is False
 
     # Fase 6: a segunda empresa cadastrada não tem contrato no lote -> pendência
@@ -98,7 +100,8 @@ def test_pipeline_completo_exportacao_excel_sobrevive_a_releitura(tmp_path):
         aba_contratos = wb["Contratos"]
         primeira_linha_dados = [c.value for c in aba_contratos[2]]
         assert primeira_linha_dados[1] == _CNPJ_LOCATARIO_FIXTURE  # coluna "CNPJ"
-        assert primeira_linha_dados[4] == "R$ 130,84"  # coluna "IRRF Retido"
+        # Reduzido a R$ 0,00 pelo redutor da Lei nº 15.270/2025 (ver comentário acima).
+        assert primeira_linha_dados[4] == "R$ 0,00"  # coluna "IRRF Retido"
 
         aba_conformidade = wb["Conformidade"]
         textos = [

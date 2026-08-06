@@ -17,6 +17,7 @@ Resiliência (requisitos §6): arquivo corrompido/ilegível NÃO lança — vira
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -81,10 +82,18 @@ class TesseractOcr:
        (permite apontar para um Tesseract do sistema com outros idiomas).
     2. Caso contrário, e SÓ quando rodando como app congelado pelo
        PyInstaller, usa o Tesseract embutido no bundle automaticamente (sem
-       exigir configuração do usuário), com ``--tessdata-dir`` apontando
-       para o ``tessdata`` embutido (via parâmetro ``config``, não via
-       variável de ambiente global, para não vazar para chamadas
-       concorrentes/futuras).
+       exigir configuração do usuário), apontando para o ``tessdata``
+       embutido via variável de ambiente ``TESSDATA_PREFIX`` — mecanismo
+       oficial do próprio Tesseract, herdado automaticamente pelo subprocesso
+       (``pytesseract`` invoca via ``subprocess`` sem ``env=`` explícito, logo
+       o processo filho herda ``os.environ`` do processo Python atual).
+       NÃO usamos mais ``--tessdata-dir`` via parâmetro ``config``: no
+       Windows, ``pytesseract`` monta os argumentos de linha de comando com
+       ``shlex.split(config, posix=False)``, e nesse modo as aspas NÃO são
+       removidas do token — um caminho entre aspas (necessário para suportar
+       espaços) chegava ao Tesseract com as aspas literais embutidas,
+       corrompendo a resolução do arquivo de idioma (bug de produção
+       reproduzido e confirmado).
     3. Fora do modo congelado, sem ``TESSERACT_CMD``, o comportamento é o
        mesmo de sempre: ``pytesseract`` resolve o binário via ``PATH`` do
        sistema.
@@ -110,17 +119,22 @@ class TesseractOcr:
         import pytesseract  # lazy
         from PIL import Image  # lazy
 
-        config_extra = ""
         if self._cmd:
             # Configuração explícita do usuário (TESSERACT_CMD) tem prioridade
-            # sobre o Tesseract embutido, mesmo rodando como `.exe`.
+            # sobre o Tesseract embutido, mesmo rodando como `.exe`. Não
+            # mexemos em TESSDATA_PREFIX aqui — pode haver um Tesseract de
+            # sistema já configurado pelo usuário com seu próprio ambiente.
             pytesseract.pytesseract.tesseract_cmd = self._cmd
         else:
             embutido = _tesseract_embutido()
             if embutido is not None:
                 tesseract_exe, tessdata_dir = embutido
                 pytesseract.pytesseract.tesseract_cmd = str(tesseract_exe)
-                config_extra = f'--tessdata-dir "{tessdata_dir}"'
+                # Variável de ambiente oficial do Tesseract para resolver o
+                # diretório do tessdata — o subprocesso lançado por
+                # pytesseract herda os.environ automaticamente. Robusto a
+                # espaços no caminho, ao contrário de passar via `config`.
+                os.environ["TESSDATA_PREFIX"] = str(tessdata_dir)
 
         textos: list[str] = []
         confiancas: list[float] = []
@@ -133,7 +147,6 @@ class TesseractOcr:
                 dados_ocr = pytesseract.image_to_data(
                     imagem,
                     lang=self._lang,
-                    config=config_extra,
                     output_type=pytesseract.Output.DICT,
                 )
                 palavras = [p for p in dados_ocr["text"] if p and p.strip()]

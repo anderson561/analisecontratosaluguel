@@ -11,6 +11,7 @@ libs REAIS são:
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -242,6 +243,10 @@ def test_reconhecer_usa_embutido_quando_congelado_e_sem_tesseract_cmd(monkeypatc
 
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "_MEIPASS", "/algum/caminho/fake", raising=False)
+    # Registra a variável para restauração automática pelo monkeypatch ao final
+    # do teste, mesmo que o código sob teste a defina diretamente via
+    # ``os.environ`` (sem passar por ``monkeypatch.setenv``).
+    monkeypatch.delenv("TESSDATA_PREFIX", raising=False)
 
     chamadas: list[dict] = []
 
@@ -260,8 +265,13 @@ def test_reconhecer_usa_embutido_quando_congelado_e_sem_tesseract_cmd(monkeypatc
     tessdata_esperado = str(Path("/algum/caminho/fake") / "tesseract" / "tessdata")
     assert pytesseract.pytesseract.tesseract_cmd == caminho_esperado
     assert len(chamadas) == 1
-    assert "--tessdata-dir" in chamadas[0]["config"]
-    assert tessdata_esperado in chamadas[0]["config"]
+    # A resolução do tessdata é via variável de ambiente TESSDATA_PREFIX — NÃO
+    # mais via parâmetro ``config`` (que no Windows passa por
+    # ``shlex.split(config, posix=False)`` dentro do pytesseract, e esse modo
+    # NÃO remove aspas dos tokens; era exatamente isso que quebrava o path).
+    assert os.environ.get("TESSDATA_PREFIX") == tessdata_esperado
+    assert "--tessdata-dir" not in chamadas[0]["config"]
+    assert chamadas[0]["config"] == ""
     assert isinstance(resultado, ResultadoOcr)
 
 
@@ -275,6 +285,9 @@ def test_reconhecer_prioriza_tesseract_cmd_do_usuario_mesmo_congelado(monkeypatc
 
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "_MEIPASS", "/algum/caminho/fake", raising=False)
+    # Sentinela: se o código mexesse em TESSDATA_PREFIX neste caminho, este
+    # valor seria sobrescrito ou removido — o teste garante que nada muda.
+    monkeypatch.setenv("TESSDATA_PREFIX", "sentinela-nao-deve-mudar")
 
     chamadas: list[dict] = []
 
@@ -292,6 +305,9 @@ def test_reconhecer_prioriza_tesseract_cmd_do_usuario_mesmo_congelado(monkeypatc
 
     assert pytesseract.pytesseract.tesseract_cmd == cmd_usuario
     assert chamadas[0]["config"] == ""  # não força --tessdata-dir quando é cmd do usuário
+    # TESSERACT_CMD do usuário tem prioridade: TESSDATA_PREFIX não é tocado,
+    # para não interferir num Tesseract de sistema configurado pelo usuário.
+    assert os.environ["TESSDATA_PREFIX"] == "sentinela-nao-deve-mudar"
 
 
 # --------------------------------------------------------------------------- #
@@ -312,3 +328,64 @@ def test_ocr_real_tesseract(tmp_path):
 
     assert isinstance(resultado, ResultadoOcr)
     assert resultado.paginas == 1
+
+
+# Instalação padrão do Tesseract no Windows (não costuma estar no PATH, mas é
+# onde o instalador oficial coloca os binários por padrão).
+_TESSERACT_INSTALL_DIR = Path(r"C:\Program Files\Tesseract-OCR")
+
+
+@pytest.mark.integration
+def test_ocr_real_tesseract_embutido_congelado_resolve_tessdata_via_env(monkeypatch, tmp_path):
+    """Regressão real (SEM mock de ``pytesseract.image_to_data``) do bug de
+    produção: ``--tessdata-dir "<caminho>"`` via parâmetro ``config`` chegava
+    ao Tesseract com as aspas literais no token (``shlex.split(config,
+    posix=False)`` no Windows não remove aspas), quebrando a resolução do
+    arquivo de idioma (``TesseractError`` "Please make sure the
+    TESSDATA_PREFIX..."). O teste mockado (acima) só valida a STRING de
+    config — não pegaria esse bug, pois nunca chama o binário de verdade.
+
+    Monta uma réplica mínima do bundle do PyInstaller em ``tmp_path``
+    (tesseract.exe + DLLs + tessdata/por.traineddata, via hardlink quando
+    possível para não copiar dezenas de MB a cada execução) e simula o modo
+    congelado de verdade (``sys.frozen``/``sys._MEIPASS``), exercitando o
+    subprocesso real do Tesseract.
+    """
+    pytest.importorskip("fitz")
+    pytest.importorskip("pytesseract")
+    pytest.importorskip("PIL")
+    import shutil
+
+    exe_real = _TESSERACT_INSTALL_DIR / "tesseract.exe"
+    traineddata_real = _TESSERACT_INSTALL_DIR / "tessdata" / "por.traineddata"
+    if not exe_real.exists() or not traineddata_real.exists():
+        pytest.skip(
+            "Tesseract não instalado em 'C:/Program Files/Tesseract-OCR' — "
+            "teste de regressão real (bundle congelado) pulado"
+        )
+
+    def _clonar(origem: Path, destino: Path) -> None:
+        try:
+            os.link(origem, destino)  # hardlink: evita copiar dezenas de MB de DLLs
+        except OSError:
+            shutil.copy2(origem, destino)
+
+    bundle = tmp_path / "tesseract"
+    (bundle / "tessdata").mkdir(parents=True)
+    _clonar(exe_real, bundle / "tesseract.exe")
+    for dll in _TESSERACT_INSTALL_DIR.glob("*.dll"):
+        _clonar(dll, bundle / dll.name)
+    _clonar(traineddata_real, bundle / "tessdata" / "por.traineddata")
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
+    monkeypatch.delenv("TESSDATA_PREFIX", raising=False)
+
+    arquivo = construir_pdf_nativo(tmp_path / "para_ocr_real.pdf", texto="ALUGUEL MENSAL")
+    motor = TesseractOcr(tesseract_cmd="")  # sem TESSERACT_CMD -> usa o embutido
+
+    resultado = motor.reconhecer(arquivo.read_bytes())
+
+    assert isinstance(resultado, ResultadoOcr)
+    assert resultado.texto  # não pode ficar vazio (era o sintoma do bug)
+    assert "ALUGUEL" in resultado.texto.upper()

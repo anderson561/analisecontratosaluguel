@@ -121,6 +121,16 @@ def _contrato_incompleto() -> Contrato:
     )
 
 
+def _contrato_vazio() -> Contrato:
+    """Nenhum dado útil extraído (ex.: arquivo que não é um contrato de locação).
+
+    Locador, locatário e valor do aluguel todos ``None`` — reproduz o caso do
+    bug relatado pelo usuário: um arquivo processado do qual o extrator não
+    conseguiu tirar nenhum dado vira uma linha completamente em branco.
+    """
+    return Contrato()
+
+
 def _relatorio_controller(contratos) -> RelatorioController:
     ctrl = RelatorioController(
         RelatorioService(_repo_portfolio()),
@@ -293,6 +303,23 @@ def test_linhas_painel_formatadas_ptbr():
 def test_linha_incompleta_marca_revisao():
     ctrl = _relatorio_controller([_contrato_incompleto()])
     assert ctrl.linhas_painel()[0].revisao is True
+
+
+def test_linhas_painel_oculta_linha_totalmente_vazia():
+    """Regressão (screenshot do usuário): arquivo do qual nada foi extraído não
+    pode virar uma linha em branco no Painel (sem Locatário/Locador/Índice,
+    "R$ 0,00" de IRRF e "revisar"). A Conformidade e a exportação, porém,
+    continuam contando TODOS os contratos processados — nada é escondido do
+    relatório de domínio, só a tabela on-screen do Painel fica mais limpa.
+    """
+    ctrl = _relatorio_controller([_contrato_pf_pj(), _contrato_vazio()])
+
+    linhas = ctrl.linhas_painel()
+
+    assert len(linhas) == 1
+    assert linhas[0].locatario == "Alpha Comercio LTDA"
+    assert ctrl.tem_dados() is True
+    assert ctrl.resumo_conformidade().total_contratos_localizados == 2
 
 
 def test_filtrar_por_indice():

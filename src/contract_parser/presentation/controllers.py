@@ -76,6 +76,23 @@ def _formatar_erro_validacao(exc: ValidationError) -> str:
     return "; ".join(partes)
 
 
+def _linha_vazia(linha: LinhaContrato) -> bool:
+    """``True`` quando NENHUM dado identificável/financeiro foi extraído.
+
+    Critério mínimo e conservador: só considera "vazia" (e portanto oculta do
+    Painel) a linha sem locatário, sem locador E sem valor de aluguel — ou
+    seja, um arquivo do qual o extrator não conseguiu tirar nada útil (ex.:
+    não é um contrato de locação, ou tem layout não reconhecido). Faltar
+    apenas um campo não basta: essa linha continua aparecendo (vai para
+    revisão, não some).
+    """
+    return (
+        linha.locatario_nome is None
+        and linha.locador_nome is None
+        and linha.valor_aluguel is None
+    )
+
+
 class ControllerError(Exception):
     """Erro de apresentação já traduzido para exibição amigável na GUI.
 
@@ -318,7 +335,14 @@ class RelatorioController:
             self._relatorio = None
             self._pares = []
             raise ControllerError(_MSG_BANCO) from exc
-        self._pares = list(zip(self._relatorio.contratos.linhas, self._contratos, strict=True))
+        # self._pares alimenta APENAS o Painel (linhas_painel/indices_disponiveis/
+        # filtrar) — linhas sem nenhum dado útil são omitidas aqui para não expor
+        # uma linha em branco na tabela on-screen. O ``Relatorio`` de domínio
+        # (self._relatorio, usado por exportar()/resumo_conformidade()) mantém
+        # TODOS os contratos processados, sem filtro: exportação e conformidade
+        # nunca escondem silenciosamente que um arquivo não foi reconhecido (§6).
+        pares = zip(self._relatorio.contratos.linhas, self._contratos, strict=True)
+        self._pares = [(linha, c) for linha, c in pares if not _linha_vazia(linha)]
 
     def tem_dados(self) -> bool:
         return self._relatorio is not None

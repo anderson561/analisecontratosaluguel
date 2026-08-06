@@ -23,6 +23,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from contract_parser.application.contract_extraction_service import ExtratorContrato
 from contract_parser.application.document_ingestor import (
     DiretorioIngestaoError,
@@ -40,12 +42,38 @@ from contract_parser.domain.empresa import Empresa
 from contract_parser.domain.relatorio import LinhaContrato, Relatorio, ResumoConformidade
 from contract_parser.domain.repositories import EmpresaRepositoryProtocol
 from contract_parser.infrastructure.database import HealthResult, RepositoryError, check_health
+from contract_parser.infrastructure.empresa_repository import EmpresaJaExisteError
 from contract_parser.infrastructure.report_exporters import (
     ExcelRelatorioExporter,
     PdfRelatorioExporter,
     formatar_data_br,
     formatar_moeda_brl,
 )
+
+# Rótulos amigáveis para os campos técnicos do modelo ``Empresa`` — usados para
+# traduzir ``pydantic.ValidationError`` em mensagem legível na GUI (nunca o
+# dump técnico bruto com ``value_error``/``input_value``/URL de documentação).
+_CAMPOS_AMIGAVEIS = {
+    "cnpj": "CNPJ",
+    "razao_social": "Razão Social",
+}
+
+_PREFIXO_VALUE_ERROR = "Value error, "
+
+
+def _formatar_erro_validacao(exc: ValidationError) -> str:
+    """Traduz um ``pydantic.ValidationError`` para uma frase legível em pt-BR.
+
+    Ex.: ``"CNPJ: CNPJ sem dígitos: ''.; Razão Social: String should have at
+    least 1 character"`` — sem ``type=``, ``input_value=`` ou URLs de doc.
+    """
+    partes = []
+    for erro in exc.errors():
+        campo = ".".join(str(p) for p in erro["loc"]) or "campo"
+        rotulo = _CAMPOS_AMIGAVEIS.get(campo, campo)
+        msg = erro["msg"].removeprefix(_PREFIXO_VALUE_ERROR)
+        partes.append(f"{rotulo}: {msg}")
+    return "; ".join(partes)
 
 
 class ControllerError(Exception):
@@ -183,8 +211,12 @@ class EmpresasController:
             return self._service.adicionar(cnpj, razao_social, ativo=ativo)
         except RepositoryError as exc:
             raise ControllerError(_MSG_BANCO) from exc
-        except Exception as exc:
-            raise ControllerError(f"Dados inválidos ou empresa já existente: {exc}") from exc
+        except EmpresaJaExisteError as exc:
+            raise ControllerError(str(exc)) from exc
+        except ValidationError as exc:
+            raise ControllerError(f"Dados inválidos: {_formatar_erro_validacao(exc)}") from exc
+        except ValueError as exc:
+            raise ControllerError(f"Dados inválidos: {exc}") from exc
 
     def editar_empresa(
         self,
@@ -200,6 +232,8 @@ class EmpresasController:
             raise ControllerError(f"Empresa não encontrada: {exc}") from exc
         except RepositoryError as exc:
             raise ControllerError(_MSG_BANCO) from exc
+        except ValidationError as exc:
+            raise ControllerError(f"Dados inválidos: {_formatar_erro_validacao(exc)}") from exc
         except ValueError as exc:
             raise ControllerError(f"Dados inválidos: {exc}") from exc
 

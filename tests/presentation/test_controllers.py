@@ -190,6 +190,48 @@ def test_editar_empresa_inexistente_vira_controller_error():
         ctrl.editar_empresa(CNPJ_A, razao_social="Nova")
 
 
+_JARGAO_TECNICO_PROIBIDO = (
+    "validation error",
+    "value_error",
+    "input_value",
+    "For further information visit",
+    "errors.pydantic.dev",
+)
+
+
+def test_adicionar_empresa_com_campos_vazios_mensagem_amigavel():
+    """Regressão: dump técnico do pydantic não pode vazar para a mensagem da GUI.
+
+    Reproduz o bug relatado pelo usuário (screenshot): clicar em "Adicionar" com
+    CNPJ e Razão Social vazios mostrava o ``str()`` bruto de um
+    ``pydantic.ValidationError`` (jargão + URL de documentação da lib).
+    """
+    ctrl = EmpresasController(FakeEmpresaRepository())
+    with pytest.raises(ControllerError) as exc_info:
+        ctrl.adicionar_empresa("", "")
+    mensagem = str(exc_info.value)
+
+    for jargao in _JARGAO_TECNICO_PROIBIDO:
+        assert jargao not in mensagem, f"Jargão técnico vazou para a UI: {jargao!r}"
+    assert "CNPJ" in mensagem
+    assert "razão social" in mensagem.lower()
+
+
+def test_editar_empresa_com_razao_social_vazia_mensagem_amigavel():
+    """Mesmo bug em ``editar_empresa``: ``ValidationError`` é subclasse de
+    ``ValueError`` e caía no ``except ValueError`` genérico sem tradução."""
+    ctrl = EmpresasController(FakeEmpresaRepository())
+    ctrl.adicionar_empresa(CNPJ_A, "Alpha Comercio LTDA")
+
+    with pytest.raises(ControllerError) as exc_info:
+        ctrl.editar_empresa(CNPJ_A, razao_social="")
+    mensagem = str(exc_info.value)
+
+    for jargao in _JARGAO_TECNICO_PROIBIDO:
+        assert jargao not in mensagem, f"Jargão técnico vazou para a UI: {jargao!r}"
+    assert "razão social" in mensagem.lower()
+
+
 def test_linhas_empresas_ordenadas_por_razao_social():
     repo = FakeEmpresaRepository()
     repo.add(Empresa(cnpj=CNPJ_B, razao_social="Zeta"))

@@ -148,10 +148,13 @@ class MainWindow(ctk.CTk):
         self._recarregar_empresas()
 
     def _on_adicionar(self) -> None:
+        cnpj = self._ent_cnpj.get().strip()
+        razao_social = self._ent_razao.get().strip()
+        if not cnpj or not razao_social:
+            messagebox.showinfo("Adicionar empresa", "Informe o CNPJ e a Razão Social.")
+            return
         try:
-            self._c.empresas.adicionar_empresa(
-                self._ent_cnpj.get(), self._ent_razao.get()
-            )
+            self._c.empresas.adicionar_empresa(cnpj, razao_social)
         except ControllerError as exc:
             messagebox.showerror("Adicionar empresa", str(exc))
             return

@@ -11,6 +11,7 @@ libs REAIS são:
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,7 @@ from contract_parser.infrastructure.text_extractors import (
     DocxExtractor,
     PdfExtractor,
     TesseractOcr,
+    _tesseract_embutido,
 )
 from tests.support.document_builders import (
     construir_docx,
@@ -209,6 +211,87 @@ def test_pdf_sem_texto_real_roteia_para_ocr(tmp_path):
 
     assert doc.metodo == "ocr"
     assert len(ocr.chamadas) == 1
+
+
+# --------------------------------------------------------------------------- #
+# Tesseract embutido (PyInstaller) — resolução de caminho e --tessdata-dir
+# --------------------------------------------------------------------------- #
+def test_tesseract_embutido_none_fora_do_modo_congelado():
+    # Rodando via pytest normal (não congelado) — resolução embutida é None,
+    # ou seja, o comportamento fora do modo congelado não muda.
+    assert _tesseract_embutido() is None
+
+
+def test_tesseract_embutido_resolve_caminho_quando_congelado(monkeypatch):
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", "/algum/caminho/fake", raising=False)
+
+    resultado = _tesseract_embutido()
+
+    assert resultado is not None
+    tesseract_exe, tessdata_dir = resultado
+    assert tesseract_exe == Path("/algum/caminho/fake") / "tesseract" / "tesseract.exe"
+    assert tessdata_dir == Path("/algum/caminho/fake") / "tesseract" / "tessdata"
+
+
+def test_reconhecer_usa_embutido_quando_congelado_e_sem_tesseract_cmd(monkeypatch, tmp_path):
+    pytest.importorskip("fitz")
+    pytest.importorskip("pytesseract")
+    pytest.importorskip("PIL")
+    import pytesseract
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", "/algum/caminho/fake", raising=False)
+
+    chamadas: list[dict] = []
+
+    def fake_image_to_data(imagem, lang=None, config="", output_type=None):
+        chamadas.append({"lang": lang, "config": config})
+        return {"text": ["ok"], "conf": ["90"]}
+
+    monkeypatch.setattr(pytesseract, "image_to_data", fake_image_to_data)
+
+    arquivo = construir_pdf_sem_texto(tmp_path / "para_ocr.pdf", paginas=1)
+    motor = TesseractOcr(tesseract_cmd="")  # sem TESSERACT_CMD configurado pelo usuário
+
+    resultado = motor.reconhecer(arquivo.read_bytes())
+
+    caminho_esperado = str(Path("/algum/caminho/fake") / "tesseract" / "tesseract.exe")
+    tessdata_esperado = str(Path("/algum/caminho/fake") / "tesseract" / "tessdata")
+    assert pytesseract.pytesseract.tesseract_cmd == caminho_esperado
+    assert len(chamadas) == 1
+    assert "--tessdata-dir" in chamadas[0]["config"]
+    assert tessdata_esperado in chamadas[0]["config"]
+    assert isinstance(resultado, ResultadoOcr)
+
+
+def test_reconhecer_prioriza_tesseract_cmd_do_usuario_mesmo_congelado(monkeypatch, tmp_path):
+    # TESSERACT_CMD configurado explicitamente pelo usuário deve continuar
+    # tendo prioridade sobre o Tesseract embutido, mesmo rodando como `.exe`.
+    pytest.importorskip("fitz")
+    pytest.importorskip("pytesseract")
+    pytest.importorskip("PIL")
+    import pytesseract
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", "/algum/caminho/fake", raising=False)
+
+    chamadas: list[dict] = []
+
+    def fake_image_to_data(imagem, lang=None, config="", output_type=None):
+        chamadas.append({"lang": lang, "config": config})
+        return {"text": ["ok"], "conf": ["90"]}
+
+    monkeypatch.setattr(pytesseract, "image_to_data", fake_image_to_data)
+
+    arquivo = construir_pdf_sem_texto(tmp_path / "para_ocr.pdf", paginas=1)
+    cmd_usuario = "C:/tesseract-sistema/tesseract.exe"
+    motor = TesseractOcr(tesseract_cmd=cmd_usuario)
+
+    motor.reconhecer(arquivo.read_bytes())
+
+    assert pytesseract.pytesseract.tesseract_cmd == cmd_usuario
+    assert chamadas[0]["config"] == ""  # não força --tessdata-dir quando é cmd do usuário
 
 
 # --------------------------------------------------------------------------- #

@@ -90,12 +90,33 @@ tudo com PyInstaller (`contract_parser.spec`), gerando um único arquivo:
 ```
 dist\ContractParser.exe
 ```
-Copie esse `.exe` para a máquina de destino. **O Tesseract-OCR não é embutido
-no executável** — continua sendo uma dependência externa que precisa ser
-instalada separadamente no computador de destino (ver
+Copie esse `.exe` para a máquina de destino — **basta esse arquivo, sem mais
+nada**. Desde que o Tesseract-OCR passou a ser **embutido no executável**
+(binário + DLLs de runtime + pacote de idioma português `por.traineddata`),
+a máquina que só EXECUTA o `.exe` pronto não precisa mais instalar o
+Tesseract manualmente nem configurar `TESSERACT_CMD` — o OCR de PDFs
+escaneados funciona out-of-the-box. Só o idioma português é embutido por
+padrão (escopo fechado; outro idioma exigiria um pedido separado).
+
+Se quiser apontar para um Tesseract do sistema com outros idiomas instalados,
+configure `TESSERACT_CMD` via `.env` (ou variável de ambiente) normalmente —
+isso continua tendo prioridade sobre o Tesseract embutido.
+
+**Requisito só para quem RECOMPILA o `.exe`:** a máquina de build precisa ter
+o Tesseract-OCR instalado localmente (ver
 [Instalação manual do Tesseract](#instalação-manual-do-tesseract-não-automatizada)),
-com `TESSERACT_CMD` configurado via `.env` (ou variável de ambiente) apontando
-para o `tesseract.exe` local.
+pois o `contract_parser.spec` copia `tesseract.exe` + DLLs + `por.traineddata`
+de lá para dentro do bundle no momento da compilação. Por padrão ele procura
+em `C:\Program Files\Tesseract-OCR` (instalação padrão do instalador
+UB-Mannheim); para usar outro caminho, defina a variável de ambiente
+`TESSERACT_BUILD_DIR` antes de rodar `build.bat`. Se o Tesseract não for
+encontrado, o `.spec` interrompe a compilação com uma mensagem explicando o
+que instalar/configurar — não é necessário na máquina que só executa o
+`.exe` já pronto.
+
+> **Licença do Tesseract OCR:** o binário embutido é do projeto
+> [Tesseract OCR](https://github.com/tesseract-ocr/tesseract), licenciado
+> sob Apache License 2.0.
 
 ## Estrutura (arquitetura em camadas)
 ```

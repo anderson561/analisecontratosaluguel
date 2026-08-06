@@ -17,6 +17,7 @@ Resiliência (requisitos §6): arquivo corrompido/ilegível NÃO lança — vira
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from contract_parser.config import settings
@@ -51,12 +52,42 @@ def ler_pdf_nativo(dados: bytes) -> tuple[str, int]:
     return "\n".join(partes).strip(), paginas
 
 
+def _tesseract_embutido() -> tuple[Path, Path] | None:
+    """Resolve o Tesseract embutido pelo PyInstaller, se aplicável.
+
+    Só retorna algo quando a aplicação está rodando como executável congelado
+    (``sys.frozen`` e ``sys._MEIPASS`` presentes) — o `.spec`
+    (``contract_parser.spec``) embute ``tesseract.exe`` + DLLs de runtime +
+    ``tessdata/por.traineddata`` em ``<_MEIPASS>/tesseract/``. Fora do modo
+    congelado (dev/pytest via ``python -m``) devolve ``None`` — o
+    comportamento permanece EXATAMENTE o mesmo de antes desta função existir.
+    """
+    if not (getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")):
+        return None
+    base = Path(sys._MEIPASS) / "tesseract"  # type: ignore[attr-defined]
+    return base / "tesseract.exe", base / "tessdata"
+
+
 class TesseractOcr:
     """Motor de OCR (implementa ``OcrEngine``): PyMuPDF renderiza, Tesseract lê.
 
     Idioma e caminho do binário vêm de ``settings`` (``ocr_lang`` / ``tesseract_cmd``).
     Todos os imports pesados (``fitz``/``pytesseract``/``PIL``) são feitos dentro de
     ``reconhecer`` — construir o objeto NÃO exige Tesseract instalado.
+
+    Resolução do binário do Tesseract em ``reconhecer`` (ordem de prioridade):
+    1. ``self._cmd`` (de ``TESSERACT_CMD``, configurado explicitamente pelo
+       usuário via `.env`) — SEMPRE tem prioridade, mesmo rodando como `.exe`
+       (permite apontar para um Tesseract do sistema com outros idiomas).
+    2. Caso contrário, e SÓ quando rodando como app congelado pelo
+       PyInstaller, usa o Tesseract embutido no bundle automaticamente (sem
+       exigir configuração do usuário), com ``--tessdata-dir`` apontando
+       para o ``tessdata`` embutido (via parâmetro ``config``, não via
+       variável de ambiente global, para não vazar para chamadas
+       concorrentes/futuras).
+    3. Fora do modo congelado, sem ``TESSERACT_CMD``, o comportamento é o
+       mesmo de sempre: ``pytesseract`` resolve o binário via ``PATH`` do
+       sistema.
     """
 
     def __init__(
@@ -79,8 +110,17 @@ class TesseractOcr:
         import pytesseract  # lazy
         from PIL import Image  # lazy
 
+        config_extra = ""
         if self._cmd:
+            # Configuração explícita do usuário (TESSERACT_CMD) tem prioridade
+            # sobre o Tesseract embutido, mesmo rodando como `.exe`.
             pytesseract.pytesseract.tesseract_cmd = self._cmd
+        else:
+            embutido = _tesseract_embutido()
+            if embutido is not None:
+                tesseract_exe, tessdata_dir = embutido
+                pytesseract.pytesseract.tesseract_cmd = str(tesseract_exe)
+                config_extra = f'--tessdata-dir "{tessdata_dir}"'
 
         textos: list[str] = []
         confiancas: list[float] = []
@@ -93,6 +133,7 @@ class TesseractOcr:
                 dados_ocr = pytesseract.image_to_data(
                     imagem,
                     lang=self._lang,
+                    config=config_extra,
                     output_type=pytesseract.Output.DICT,
                 )
                 palavras = [p for p in dados_ocr["text"] if p and p.strip()]

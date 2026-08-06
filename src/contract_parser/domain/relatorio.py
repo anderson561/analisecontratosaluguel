@@ -53,6 +53,16 @@ class LinhaContrato:
         return self.irrf.imposto if self.irrf is not None else _ZERO
 
     @property
+    def reducao_irrf(self) -> Decimal:
+        """Redução aplicada pela Lei nº 15.270/2025 (R$ 0,00 quando não calculado/PJ).
+
+        Auditabilidade/transparência (ADR-003): expõe o valor que o redutor
+        já abateu do imposto da tabela padrão, para conferência do contador
+        (o valor final, já reduzido, é o que aparece em :attr:`irrf_retido`).
+        """
+        return self.irrf.reducao_aplicada if self.irrf is not None else _ZERO
+
+    @property
     def dados_incompletos(self) -> bool:
         """``True`` quando faltou dado essencial para o IRRF (revisão manual)."""
         return self.valor_aluguel is None or self.irrf is None
@@ -75,6 +85,14 @@ class RelatorioContratos:
         total = _ZERO
         for linha in self.linhas:
             total += linha.irrf_retido
+        return total
+
+    @property
+    def total_reducao_irrf(self) -> Decimal:
+        """Somatório da redução da Lei nº 15.270/2025 (para rodapé/total)."""
+        total = _ZERO
+        for linha in self.linhas:
+            total += linha.reducao_irrf
         return total
 
 

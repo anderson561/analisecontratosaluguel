@@ -138,6 +138,12 @@ Entregue (RF01–RF06, CA-01, CA-03 a CA-06 — ver
   de IRRF 2026 com memória de cálculo, match de portfólio (CNPJ + fuzzy),
   flags jurídicas (Art. 18/37 da Lei 8.245/91), GUI CustomTkinter e exportação
   PDF/Excel.
+- O motor de IRRF aplica automaticamente, para locador Pessoa Física, o
+  redutor da Lei nº 15.270/2025 (Art. 3º-A da Lei nº 9.250/1995) sobre o
+  imposto calculado pela tabela progressiva padrão — o valor reduzido fica
+  visível no Painel e nos relatórios exportados (coluna "Redução IRRF"), ao
+  lado do IRRF Retido já com a redução aplicada. Fórmula, fonte legal e
+  ressalvas: [ADR-003](.agent/specs/adr-003-redutor-irrf-2026.md).
 
 Fora do escopo desta versão (decisão deliberada, não pendência esquecida):
 - **Docker/`docker-compose`** (CA-02) — adiado; app e banco (SQLite) rodam
@@ -148,11 +154,6 @@ Fora do escopo desta versão (decisão deliberada, não pendência esquecida):
   aprovado. Campos ambíguos vão para revisão manual em vez de sair via LLM.
   Consequência: `LLM_PROVIDER`/`LLM_API_KEY` no `.env` ficam vazios em
   produção — não é uma variável esquecida.
-- **Redutor de IRRF da Lei nº 15.270/2025** — a fórmula/coeficientes exatos
-  ainda não foram validados na fonte oficial da RFB; o motor calcula apenas a
-  tabela progressiva padrão (o que o RF04/CA-03 exige). Ponto de extensão
-  documentado em `aplicar_redutor_15270` (`domain/irrf.py`), desligado por
-  padrão.
 - **Revalidação online da tabela IRRF contra a RFB** — o botão/fluxo é
   suportado pela interface (`AtualizadorTabelaRFB`), mas o adaptador de
   produção (`StubAtualizadorTabelaRFB`) ainda não integra rede; a aplicação
@@ -163,6 +164,7 @@ Fora do escopo desta versão (decisão deliberada, não pendência esquecida):
 - [Requisitos & regras de negócio](.agent/specs/contract-parser-requirements.md)
 - [ADR-001 — Stack & Arquitetura](.agent/specs/adr-001-stack-e-arquitetura.md)
 - [ADR-002 — Migração de Persistência MongoDB → SQLite](.agent/specs/adr-002-migracao-mongodb-sqlite.md)
+- [ADR-003 — Redutor de IRRF 2026 (Lei nº 15.270/2025)](.agent/specs/adr-003-redutor-irrf-2026.md)
 - [Checklist de aceite final (CA-01 a CA-06)](.agent/specs/checklist-aceite-final.md)
 
 ## Roadmap (fases)

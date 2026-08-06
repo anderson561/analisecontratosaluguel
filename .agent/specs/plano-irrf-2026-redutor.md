@@ -1,6 +1,6 @@
 # Plano de Ação — Redutor de IRRF 2026 (Lei nº 15.270/2025)
 
-> **Data:** 2026-08-06 · **Status:** Fase 0 concluída (ver [ADR-003](adr-003-redutor-irrf-2026.md)) — Fase 1 em andamento
+> **Data:** 2026-08-06 · **Status:** Plano concluído — Fases 0–4 (commits `bb5491e`, e este)
 > **Decisão do usuário:** implementar **apenas** o redutor da Lei nº 15.270/2025 (aplicado ao imposto). O "desconto simplificado" de R$607,20 (base de cálculo) **não** será implementado — confirmado que não se aplica à retenção de aluguel PJ→PF (ver ADR-003 §3).
 > **Decisão do usuário (pós-Fase 0):** a fórmula oficial, quando aplicada ao aluguel (sem o desconto simplificado que só existe para salário), resulta em imposto residual entre R$5.000,00 e R$7.350,00 (ex.: R$153,38 em R$5.000,00 exatos) — NÃO isenção total. Usuário optou por implementar essa leitura técnica/mecânica, ciente da ressalva de que não há exemplo oficial da RFB específico para aluguel (ver ADR-003 §3).
 

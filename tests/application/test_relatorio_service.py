@@ -96,6 +96,8 @@ def test_ca03_irrf_pf_pj_base_5000():
     assert linha.irrf.deducao == Decimal("908.73")
     assert linha.irrf.imposto_antes_reducao == Decimal("466.27")
     assert linha.irrf_retido == Decimal("153.38")
+    # Redução exposta para auditabilidade (ADR-003): 466,27 − 153,38 = 312,89.
+    assert linha.reducao_irrf == Decimal("312.89")
     assert linha.dados_incompletos is False
 
 
@@ -106,6 +108,7 @@ def test_locador_pj_gera_irrf_zero():
     assert linha.irrf is not None
     assert linha.irrf.retido is False
     assert linha.irrf_retido == Decimal("0.00")
+    assert linha.reducao_irrf == Decimal("0.00")
 
 
 def test_total_irrf_retido_soma_as_linhas():
@@ -113,6 +116,13 @@ def test_total_irrf_retido_soma_as_linhas():
     relatorio = RelatorioService(_repo()).montar(contratos)
     # 153,38 (PF, já com o redutor da Lei nº 15.270/2025) + 0,00 (PJ) = 153,38.
     assert relatorio.contratos.total_irrf_retido == Decimal("153.38")
+
+
+def test_total_reducao_irrf_soma_as_linhas():
+    contratos = [_contrato_pf_pj(), _contrato_locador_pj()]
+    relatorio = RelatorioService(_repo()).montar(contratos)
+    # 312,89 (PF) + 0,00 (PJ) = 312,89.
+    assert relatorio.contratos.total_reducao_irrf == Decimal("312.89")
 
 
 def test_contrato_sem_valor_de_aluguel_nao_calcula_irrf():
@@ -126,6 +136,7 @@ def test_contrato_sem_valor_de_aluguel_nao_calcula_irrf():
 
     assert linha.irrf is None
     assert linha.irrf_retido == Decimal("0.00")
+    assert linha.reducao_irrf == Decimal("0.00")
     assert linha.dados_incompletos is True
 
 

@@ -286,7 +286,7 @@ class MainWindow(ctk.CTk):
         for w in self._tabela_painel.winfo_children():
             w.destroy()
         cabecalhos = [
-            "Locatário", "Locador", "Valor", "IRRF", "Índice",
+            "Locatário", "Locador", "Valor", "IRRF", "Redução IRRF", "Índice",
             "Próx. Reajuste", "Auto?", "Vencimento", "Revisão",
         ]
         for col, texto in enumerate(cabecalhos):
@@ -298,8 +298,9 @@ class MainWindow(ctk.CTk):
             revisao_txt = "⚠ revisar" if linha.revisao else "ok"
             cor = _COR_REVISAO if linha.revisao else None
             celulas = [
-                linha.locatario, linha.locador, linha.valor, linha.irrf, linha.indice,
-                linha.proximo_reajuste, linha.automatico, linha.vencimento, revisao_txt,
+                linha.locatario, linha.locador, linha.valor, linha.irrf, linha.reducao_irrf,
+                linha.indice, linha.proximo_reajuste, linha.automatico, linha.vencimento,
+                revisao_txt,
             ]
             for col, valor in enumerate(celulas):
                 ctk.CTkLabel(

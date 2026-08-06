@@ -36,6 +36,7 @@ CABECALHOS_CONTRATOS = [
     "Locador",
     "Valor Aluguel",
     "IRRF Retido",
+    "Redução IRRF (Lei 15.270/2025)",
     "Índice",
     "Próximo Reajuste",
     "Reajuste Auto",
@@ -89,6 +90,7 @@ def linha_para_celulas(linha: LinhaContrato) -> list[str]:
         _texto(linha.locador_nome),
         formatar_moeda_brl(linha.valor_aluguel),
         formatar_moeda_brl(linha.irrf_retido),
+        formatar_moeda_brl(linha.reducao_irrf),
         _texto(linha.indice),
         _texto(linha.proximo_reajuste),
         _sim_nao(linha.reajuste_automatico),
@@ -111,10 +113,18 @@ class ExcelRelatorioExporter:
             celula.font = Font(bold=True)
         for linha in contratos.linhas:
             ws.append(linha_para_celulas(linha))
-        # Rodapé com o total de IRRF retido (coluna "IRRF Retido").
+        # Rodapé com o total de IRRF retido ("IRRF Retido") e de redução aplicada
+        # ("Redução IRRF"), cada total na coluna correspondente ao seu cabeçalho.
         ws.append([])
         ws.append(
-            ["TOTAL", _VAZIO, _VAZIO, _VAZIO, formatar_moeda_brl(contratos.total_irrf_retido)]
+            [
+                "TOTAL",
+                _VAZIO,
+                _VAZIO,
+                _VAZIO,
+                formatar_moeda_brl(contratos.total_irrf_retido),
+                formatar_moeda_brl(contratos.total_reducao_irrf),
+            ]
         )
 
     def _aba_conformidade(self, ws, conformidade: ResumoConformidade) -> None:
@@ -176,7 +186,18 @@ class PdfRelatorioExporter:
         for linha in contratos.linhas:
             dados.append(linha_para_celulas(linha))
         dados.append(
-            ["TOTAL", "", "", "", formatar_moeda_brl(contratos.total_irrf_retido), "", "", "", ""]
+            [
+                "TOTAL",
+                "",
+                "",
+                "",
+                formatar_moeda_brl(contratos.total_irrf_retido),
+                formatar_moeda_brl(contratos.total_reducao_irrf),
+                "",
+                "",
+                "",
+                "",
+            ]
         )
 
         tabela = Table(dados, repeatRows=1)

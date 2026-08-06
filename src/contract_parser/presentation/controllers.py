@@ -130,6 +130,7 @@ class LinhaPainel:
     locador: str
     valor: str
     irrf: str
+    reducao_irrf: str
     indice: str
     proximo_reajuste: str
     automatico: str
@@ -356,6 +357,7 @@ class RelatorioController:
             locador=linha.locador_nome or "",
             valor=formatar_moeda_brl(linha.valor_aluguel),
             irrf=formatar_moeda_brl(linha.irrf_retido),
+            reducao_irrf=formatar_moeda_brl(linha.reducao_irrf),
             indice=linha.indice or "",
             proximo_reajuste=linha.proximo_reajuste or "",
             automatico=_sim_nao(linha.reajuste_automatico),

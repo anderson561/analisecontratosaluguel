@@ -116,10 +116,20 @@ def test_excel_gera_duas_abas_com_cabecalhos_e_valores(tmp_path):
     assert contratos["D2"].value == "R$ 5.000,00"
     # 466,27 (tabela) reduzido a 153,38 pelo redutor da Lei nº 15.270/2025 (ADR-003).
     assert contratos["E2"].value == "R$ 153,38"
-    assert contratos["H2"].value == "Sim"
-    assert contratos["I2"].value == "10/10/2028"
-    # Locador PJ ⇒ IRRF R$ 0,00.
+    # Coluna nova: valor da redução aplicada (466,27 − 153,38 = 312,89).
+    assert contratos["F2"].value == "R$ 312,89"
+    assert contratos["I2"].value == "Sim"
+    assert contratos["J2"].value == "10/10/2028"
+    # Locador PJ ⇒ IRRF R$ 0,00 e nenhuma redução.
     assert contratos["E3"].value == "R$ 0,00"
+    assert contratos["F3"].value == "R$ 0,00"
+
+    # Rodapé: total de IRRF retido (153,38 + 0,00) e total de redução (312,89 + 0,00).
+    linhas_valores = list(contratos.iter_rows(values_only=True))
+    total_row = linhas_valores[-1]
+    assert total_row[0] == "TOTAL"
+    assert total_row[4] == "R$ 153,38"
+    assert total_row[5] == "R$ 312,89"
 
     conformidade = wb["Conformidade"]
     valores = {row[0].value for row in conformidade.iter_rows() if row[0].value}
@@ -160,6 +170,9 @@ def test_pdf_gera_arquivo_nao_trivial_com_texto_esperado(tmp_path):
     assert "Alpha Comercio LTDA" in texto
     # 466,27 (tabela) reduzido a 153,38 pelo redutor da Lei nº 15.270/2025 (ADR-003).
     assert "R$ 153,38" in texto
+    # Coluna nova: valor da redução aplicada (466,27 − 153,38 = 312,89).
+    assert "Redução IRRF" in texto
+    assert "R$ 312,89" in texto
     assert PENDENCIA in texto
 
 

@@ -75,10 +75,29 @@ status, prova (teste/arquivo) e commit onde foi implementado.
 
 **Commit:** `463caeb` — feat(irrf): Fase 5 — motor de cálculo de IRRF 2026 (RF04)
 
-> **Risco residual documentado:** o redutor da Lei nº 15.270/2025 (rendimentos
-> ≤ R$ 7.350,00) permanece **desligado** — coeficientes ainda não validados na
-> fonte oficial da RFB. O CA-03 é atendido pela tabela progressiva padrão, que
-> é o que o RF04 exige; o redutor é ponto de extensão documentado (`domain/irrf.py::aplicar_redutor_15270`).
+> ⚠️ **Atualização (2026-08-06):** o redutor da Lei nº 15.270/2025 (Art. 3º-A
+> da Lei nº 9.250/1995, rendimentos mensais ≤ R$ 7.350,00) foi **validado
+> contra o texto oficial do planalto.gov.br** e **ativado** em `domain/irrf.py`
+> — `calcular_irrf()` aplica a redução automaticamente para locador PF, antes
+> do arredondamento final. O CA-03 (base R$ 5.000,00) passa a esperar
+> **R$ 153,38** (tabela padrão R$ 466,27 reduzida em R$ 312,89), não mais
+> R$ 466,27 puro. Fórmula, fonte legal e os exemplos numéricos de conferência
+> estão em [ADR-003](adr-003-redutor-irrf-2026.md).
+> **Ressalva mantida para rastreabilidade (ver ADR-003 §3):** não existe
+> exemplo oficial da RFB específico para aluguel (só para salário, via
+> desconto simplificado, que não se aplica a esta modalidade de retenção); a
+> leitura mecânica da fórmula sobre o valor cheio do aluguel foi uma decisão
+> explícita do usuário/stakeholder, ciente do risco documentado.
+> A visibilidade do valor reduzido (auditabilidade para o contador) foi
+> adicionada ao Painel e aos relatórios exportados (coluna "Redução IRRF (Lei
+> 15.270/2025)") em `domain/relatorio.py::LinhaContrato.reducao_irrf`,
+> `infrastructure/report_exporters.py` e `presentation/controllers.py::LinhaPainel`.
+> Provas: `tests/domain/test_irrf.py`, `tests/domain/test_relatorio.py`,
+> `tests/application/test_relatorio_service.py`,
+> `tests/infrastructure/test_report_exporters.py`,
+> `tests/presentation/test_controllers.py`.
+> **Commits:** `bb5491e` (ativação do redutor no domínio) e (este commit)
+> (visibilidade da redução no Painel/relatórios + documentação).
 
 ---
 
@@ -133,7 +152,7 @@ status, prova (teste/arquivo) e commit onde foi implementado.
 |---|---|---|---|
 | CA-01 | Importação 50 empresas | ✅ mock · ✅ **validado de fato (SQLite real, MIG-B/M6)** | `c0c9d0a` |
 | CA-02 | Docker | 🔸 deferido (ADR-001 D2) | — |
-| CA-03 | IRRF 2026 + memória de cálculo | ✅ mock (puro) · ✅ persistência com SQLite real | `463caeb` |
+| CA-03 | IRRF 2026 + memória de cálculo (+ redutor Lei 15.270/2025, ativo desde 2026-08-06) | ✅ mock (puro) · ✅ persistência com SQLite real | `463caeb` (+ `bb5491e`, + este commit) |
 | CA-04 | Alerta de pendência de portfólio | ✅ mock | `0552f3b` |
 | CA-05 | Índice vedado (Art. 18) | ✅ mock (fixture sintética) | `c8fdff9` |
 | CA-06 | Cumulação de garantias (Art. 37) | ✅ mock (fixture sintética) | `c8fdff9` |
@@ -157,8 +176,12 @@ reais sem `CONTRATOS_REAIS_DIR` definida (×3).
    fixtures sintéticas; recomenda-se rodar o harness (`CONTRATOS_REAIS_DIR`)
    sobre um lote real assim que disponível e anexar o resultado a este
    checklist.
-2. **Redutor da Lei nº 15.270/2025 (IRRF)** — pendente de validação da fórmula
-   na fonte oficial da RFB; desligado por padrão (ver CA-03).
+2. **Redutor da Lei nº 15.270/2025 (IRRF)** — ✅ validado e **ativado**
+   (2026-08-06, commits `bb5491e` + este commit; ver atualização no CA-03 e
+   [ADR-003](adr-003-redutor-irrf-2026.md)). Risco residual aceito
+   conscientemente pelo usuário: não há exemplo oficial da RFB específico
+   para aluguel (só para salário) — decisão registrada no ADR-003 §3 para não
+   ser reaberta sem novo motivo concreto.
 3. **Revalidação online da tabela IRRF contra a RFB** e **provedor de LLM**
    — ambos com stub de produção que falha explicitamente (fail-secure) em vez
    de simular sucesso; nenhuma integração de rede ativa nesta versão.

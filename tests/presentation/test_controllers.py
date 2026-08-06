@@ -295,10 +295,21 @@ def test_linhas_painel_formatadas_ptbr():
     assert linha.valor == "R$ 5.000,00"
     # 466,27 (tabela) reduzido a 153,38 pelo redutor da Lei nº 15.270/2025 (ADR-003).
     assert linha.irrf == "R$ 153,38"
+    # Redução exposta para auditabilidade (ADR-003): 466,27 − 153,38 = 312,89.
+    assert linha.reducao_irrf == "R$ 312,89"
     assert linha.indice == "IPCA"
     assert linha.automatico == "Sim"
     assert linha.vencimento == "10/10/2028"
     assert linha.revisao is False
+
+
+def test_linhas_painel_sem_reducao_para_locador_pj():
+    """Locador PJ não tem IRRF retido, logo não há redução a exibir."""
+    ctrl = _relatorio_controller([_contrato_locador_pj()])
+    linha = ctrl.linhas_painel()[0]
+
+    assert linha.irrf == "R$ 0,00"
+    assert linha.reducao_irrf == "R$ 0,00"
 
 
 def test_linha_incompleta_marca_revisao():

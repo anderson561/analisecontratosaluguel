@@ -78,6 +78,25 @@ pytest tests/application/test_harness_contratos_reais.py -s
 ```
 Sem a variável definida, a suíte é ignorada (`skip`) automaticamente.
 
+## Gerando o executável (.exe)
+Para distribuir a aplicação sem exigir Python instalado na máquina de destino,
+basta rodar (na raiz do repositório, no Windows):
+```bash
+build.bat
+```
+O script cria/reaproveita o venv em `.venv`, instala o projeto com o grupo
+opcional `[build]` (adiciona `pyinstaller` às dependências normais) e empacota
+tudo com PyInstaller (`contract_parser.spec`), gerando um único arquivo:
+```
+dist\ContractParser.exe
+```
+Copie esse `.exe` para a máquina de destino. **O Tesseract-OCR não é embutido
+no executável** — continua sendo uma dependência externa que precisa ser
+instalada separadamente no computador de destino (ver
+[Instalação manual do Tesseract](#instalação-manual-do-tesseract-não-automatizada)),
+com `TESSERACT_CMD` configurado via `.env` (ou variável de ambiente) apontando
+para o `tesseract.exe` local.
+
 ## Estrutura (arquitetura em camadas)
 ```
 src/contract_parser/

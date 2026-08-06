@@ -258,12 +258,23 @@ def extrair_tipo_locacao(texto: str) -> ResultadoCampo[TipoLocacao]:
 # --------------------------------------------------------------------------- #
 # Valor do aluguel
 # --------------------------------------------------------------------------- #
-# ATENÇÃO: a lacuna entre "aluguel" e "R$" usa ``[^\n]`` (fica na mesma linha),
+# ATENÇÃO: a lacuna entre a âncora e "R$" usa ``[^\n]`` (fica na mesma linha),
 # NÃO ``[^R\n]``. Sob ``re.IGNORECASE`` uma classe negada ``[^R]`` exclui também
 # o 'r' minúsculo — corriqueiro em pt-BR ("impo(r)ta em", "co(r)responde a") —,
 # o que fazia a extração do valor falhar sempre que houvesse um 'r' no conector.
+#
+# Além de "aluguel", alguns contratos comerciais (ex.: modelos "BONI
+# ADMINISTRAÇÃO", "SOHO") descrevem o valor como "preço mensal da locação" ou
+# "valor mensal da locação", sem usar a palavra "aluguel". A palavra "mensal"
+# é exigida logo após "preço"/"valor" (não basta "valor" sozinho) para não
+# casar com outras menções de "valor" na mesma frase que não são o valor do
+# aluguel (ex.: "taxa condominial no valor de R$ ...", "IPTU no valor de
+# R$ ..." — nenhuma tem "valor mensal" adjacente).
 _RE_VALOR_ALUGUEL = re.compile(
-    r"alugu[eé]l[^\n]{0,60}?R\$\s*(\d{1,3}(?:\.\d{3})*(?:,\d{2})?|\d+(?:,\d{2})?)",
+    r"(?:alugu[eé]l"
+    r"|pre[çc]o\s+mensal(?:\s+da\s+loca[çc][ãa]o)?"
+    r"|valor\s+mensal(?:\s+da\s+loca[çc][ãa]o)?)"
+    r"[^\n]{0,60}?R\$\s*(\d{1,3}(?:\.\d{3})*(?:,\d{2})?|\d+(?:,\d{2})?)",
     re.IGNORECASE,
 )
 

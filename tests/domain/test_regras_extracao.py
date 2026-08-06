@@ -186,6 +186,31 @@ def test_extrair_valor_aluguel_ausente():
     assert not R.extrair_valor_aluguel("contrato sem valor monetário").resolvido
 
 
+def test_valor_aluguel_preco_mensal_da_locacao():
+    # REGRESSÃO: contratos comerciais (ex.: "BONI ADMINISTRAÇÃO") descrevem o
+    # valor como "preço mensal da locação" em vez de usar a palavra "aluguel".
+    # Deve capturar o PRIMEIRO valor (preço/locação), não os valores de taxa
+    # condominial/IPTU que aparecem depois na mesma frase.
+    texto = (
+        "O preço mensal da locação é de R$ 7.800,00 (sete mil e oitocentos "
+        "reais), já incluído a taxa condominial no valor de R$ 2.325,00 (dois "
+        "mil, trezentos e vinte e cinco reais), IPTU no valor de R$ 400,00 "
+        "(quatrocentos reais)."
+    )
+    assert R.extrair_valor_aluguel(texto).valor == Decimal("7800.00")
+
+
+def test_valor_aluguel_valor_mensal_da_locacao():
+    # REGRESSÃO: contrato "SOHO" descreve o valor como "valor mensal da
+    # locação" em vez de usar a palavra "aluguel".
+    texto = (
+        "SEXTA: DOS VALOR MENSAL DA LOCAÇÃO: O valor mensal da locação é de "
+        "R$ 7.800,00 (SETE MIL E OITOCENTOS REAIS), que o LOCATÁRIO se "
+        "compromete a pagar até o dia 05 do mês subsequente ao vencido."
+    )
+    assert R.extrair_valor_aluguel(texto).valor == Decimal("7800.00")
+
+
 # --------------------------------------------------------------------------- #
 # Multa rescisória: valor direto OU "N aluguéis" (× base)
 # --------------------------------------------------------------------------- #

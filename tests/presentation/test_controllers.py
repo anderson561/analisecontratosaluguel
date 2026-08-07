@@ -600,6 +600,201 @@ def test_carregar_historico_degrada_quando_listar_falha():
 
 
 # --------------------------------------------------------------------------- #
+# registro_id no Painel + exclusão (Fase 3 do plano de persistência)
+# --------------------------------------------------------------------------- #
+def test_definir_contratos_com_documentos_traz_registro_id_dos_persistidos():
+    repo = FakeContratoRepository()
+    ctrl = RelatorioController(
+        RelatorioService(_repo_portfolio()),
+        ExcelRelatorioExporter(),
+        PdfRelatorioExporter(),
+        contrato_repo=repo,
+    )
+    documentos = [_documento("pasta/c1.pdf", "hash1"), _documento("pasta/c2.pdf", "hash2")]
+    contratos = [_contrato_pf_pj(), _contrato_locador_pj()]
+
+    ctrl.definir_contratos(contratos, documentos=documentos)
+
+    linhas = {linha.locatario: linha for linha in ctrl.linhas_painel()}
+    ids_esperados = {r.arquivo_nome: r.id for r in repo.listar()}
+    assert linhas["Alpha Comercio LTDA"].registro_id == ids_esperados["c1.pdf"]
+    assert linhas["Beta Servicos ME"].registro_id == ids_esperados["c2.pdf"]
+
+
+def test_definir_contratos_com_falha_de_persistencia_traz_registro_id_none():
+    repo = FakeContratoRepository()
+    repo.arquivos_com_erro.add("c1.pdf")
+    ctrl = RelatorioController(
+        RelatorioService(_repo_portfolio()),
+        ExcelRelatorioExporter(),
+        PdfRelatorioExporter(),
+        contrato_repo=repo,
+    )
+    documentos = [_documento("pasta/c1.pdf", "hash1"), _documento("pasta/c2.pdf", "hash2")]
+    contratos = [_contrato_pf_pj(), _contrato_locador_pj()]
+
+    ctrl.definir_contratos(contratos, documentos=documentos)
+
+    linhas = {linha.locatario: linha for linha in ctrl.linhas_painel()}
+    assert linhas["Alpha Comercio LTDA"].registro_id is None
+    registro_c2 = repo.listar()[0]
+    assert linhas["Beta Servicos ME"].registro_id == registro_c2.id
+
+
+def test_carregar_historico_traz_registro_id_correto_por_linha():
+    repo = FakeContratoRepository()
+    registro1 = repo.salvar(
+        arquivo_nome="antigo1.pdf",
+        arquivo_hash="hash-antigo-1",
+        contrato=_contrato_pf_pj(),
+        linha=RelatorioService(_repo_portfolio()).montar([_contrato_pf_pj()]).contratos.linhas[0],
+        revisao=False,
+    )
+    registro2 = repo.salvar(
+        arquivo_nome="antigo2.pdf",
+        arquivo_hash="hash-antigo-2",
+        contrato=_contrato_locador_pj(),
+        linha=RelatorioService(_repo_portfolio())
+        .montar([_contrato_locador_pj()])
+        .contratos.linhas[0],
+        revisao=False,
+    )
+
+    ctrl = RelatorioController(
+        RelatorioService(_repo_portfolio()),
+        ExcelRelatorioExporter(),
+        PdfRelatorioExporter(),
+        contrato_repo=repo,
+    )
+    ctrl.carregar_historico()
+
+    linhas = {linha.locatario: linha for linha in ctrl.linhas_painel()}
+    assert linhas["Alpha Comercio LTDA"].registro_id == registro1.id
+    assert linhas["Beta Servicos ME"].registro_id == registro2.id
+
+
+def test_definir_contratos_sem_documentos_nem_registro_ids_traz_registro_id_none():
+    ctrl = _relatorio_controller([_contrato_pf_pj(), _contrato_locador_pj()])
+    assert all(linha.registro_id is None for linha in ctrl.linhas_painel())
+
+
+def test_excluir_contrato_remove_do_repo_e_recarrega_o_painel():
+    repo = FakeContratoRepository()
+    registro1 = repo.salvar(
+        arquivo_nome="antigo1.pdf",
+        arquivo_hash="hash-antigo-1",
+        contrato=_contrato_pf_pj(),
+        linha=RelatorioService(_repo_portfolio()).montar([_contrato_pf_pj()]).contratos.linhas[0],
+        revisao=False,
+    )
+    repo.salvar(
+        arquivo_nome="antigo2.pdf",
+        arquivo_hash="hash-antigo-2",
+        contrato=_contrato_locador_pj(),
+        linha=RelatorioService(_repo_portfolio())
+        .montar([_contrato_locador_pj()])
+        .contratos.linhas[0],
+        revisao=False,
+    )
+    ctrl = RelatorioController(
+        RelatorioService(_repo_portfolio()),
+        ExcelRelatorioExporter(),
+        PdfRelatorioExporter(),
+        contrato_repo=repo,
+    )
+    ctrl.carregar_historico()
+    assert len(ctrl.linhas_painel()) == 2
+
+    ctrl.excluir_contrato(registro1.id)
+
+    linhas = ctrl.linhas_painel()
+    assert len(linhas) == 1
+    assert linhas[0].locatario == "Beta Servicos ME"
+    assert registro1.id not in {r.id for r in repo.listar()}
+
+
+def test_excluir_contrato_sem_contrato_repo_vira_controller_error():
+    ctrl = _relatorio_controller([_contrato_pf_pj()])
+    with pytest.raises(ControllerError):
+        ctrl.excluir_contrato("qualquer-id")
+
+
+def test_excluir_contrato_inexistente_vira_controller_error():
+    repo = FakeContratoRepository()
+    ctrl = RelatorioController(
+        RelatorioService(_repo_portfolio()),
+        ExcelRelatorioExporter(),
+        PdfRelatorioExporter(),
+        contrato_repo=repo,
+    )
+    ctrl.carregar_historico()
+    with pytest.raises(ControllerError):
+        ctrl.excluir_contrato("id-que-nao-existe")
+
+
+def test_excluir_contrato_com_falha_de_banco_vira_controller_error_nao_repository_error():
+    class RepoQueFalhaAoExcluir(FakeContratoRepository):
+        def excluir(self, id):
+            raise RepositoryError("banco indisponivel")
+
+    repo = RepoQueFalhaAoExcluir()
+    repo.salvar(
+        arquivo_nome="antigo1.pdf",
+        arquivo_hash="hash-antigo-1",
+        contrato=_contrato_pf_pj(),
+        linha=RelatorioService(_repo_portfolio()).montar([_contrato_pf_pj()]).contratos.linhas[0],
+        revisao=False,
+    )
+    ctrl = RelatorioController(
+        RelatorioService(_repo_portfolio()),
+        ExcelRelatorioExporter(),
+        PdfRelatorioExporter(),
+        contrato_repo=repo,
+    )
+    with pytest.raises(ControllerError):
+        ctrl.excluir_contrato("qualquer-id")
+
+
+def test_excluir_todos_contratos_esvazia_o_painel_e_retorna_a_contagem():
+    repo = FakeContratoRepository()
+    repo.salvar(
+        arquivo_nome="antigo1.pdf",
+        arquivo_hash="hash-antigo-1",
+        contrato=_contrato_pf_pj(),
+        linha=RelatorioService(_repo_portfolio()).montar([_contrato_pf_pj()]).contratos.linhas[0],
+        revisao=False,
+    )
+    repo.salvar(
+        arquivo_nome="antigo2.pdf",
+        arquivo_hash="hash-antigo-2",
+        contrato=_contrato_locador_pj(),
+        linha=RelatorioService(_repo_portfolio())
+        .montar([_contrato_locador_pj()])
+        .contratos.linhas[0],
+        revisao=False,
+    )
+    ctrl = RelatorioController(
+        RelatorioService(_repo_portfolio()),
+        ExcelRelatorioExporter(),
+        PdfRelatorioExporter(),
+        contrato_repo=repo,
+    )
+    ctrl.carregar_historico()
+
+    total = ctrl.excluir_todos_contratos()
+
+    assert total == 2
+    assert ctrl.linhas_painel() == []
+    assert repo.listar() == []
+
+
+def test_excluir_todos_contratos_sem_contrato_repo_vira_controller_error():
+    ctrl = _relatorio_controller([_contrato_pf_pj()])
+    with pytest.raises(ControllerError):
+        ctrl.excluir_todos_contratos()
+
+
+# --------------------------------------------------------------------------- #
 # AppController: orquestração + status de conexão (degradação graciosa)
 # --------------------------------------------------------------------------- #
 def test_app_processar_pasta_realimenta_painel_e_conformidade():

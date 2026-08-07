@@ -116,6 +116,7 @@ class LinhaPainel:
     automatico: str
     vencimento: str
     revisao: bool
+    registro_id: str | None
 
 
 @dataclass(frozen=True)
@@ -307,8 +308,10 @@ class RelatorioController:
         self._contrato_repo = contrato_repo
         self._contratos: list[Contrato] = []
         self._relatorio: Relatorio | None = None
-        # Pares (linha do relatório, contrato de origem) para filtragem/destaque.
-        self._pares: list[tuple[LinhaContrato, Contrato]] = []
+        # Trincas (linha do relatório, contrato de origem, id do registro
+        # persistido — ``None`` quando não há contrato_repo ou a persistência
+        # daquele item falhou) para filtragem/destaque/exclusão do Painel.
+        self._pares: list[tuple[LinhaContrato, Contrato, str | None]] = []
         # (arquivo_nome, motivo) dos itens cuja persistência falhou na última
         # chamada a definir_contratos (degradação graciosa — não aborta o lote).
         self._erros_persistencia: list[tuple[str, str]] = []
@@ -318,6 +321,7 @@ class RelatorioController:
         contratos: list[Contrato],
         *,
         documentos: list[DocumentoTexto] | None = None,
+        registro_ids: list[str | None] | None = None,
     ) -> None:
         """Recalcula os relatórios a partir dos contratos processados.
 
@@ -325,8 +329,12 @@ class RelatorioController:
         pasta), habilita a persistência de cada contrato via
         ``contrato_repo`` (se injetado) — pareado 1:1 com ``contratos`` pela
         MESMA ordem em que ambos vêm de ``ProcessamentoController`` (§Fase 2 do
-        plano). Chamadas sem ``documentos`` (ex.: :meth:`carregar_historico`)
-        nunca persistem, evitando repersistir dados que já vieram do banco.
+        plano); o ``id`` devolvido por cada gravação alimenta o Painel
+        (§Fase 3). ``registro_ids``, quando presente (ex.:
+        :meth:`carregar_historico`), traz os ids já conhecidos de um histórico
+        recarregado, na mesma ordem de ``contratos`` — usado quando NÃO se quer
+        repersistir (``documentos`` ausente). Sem nenhum dos dois, todo item
+        nasce sem id (``None`` — nada a excluir no banco).
         """
         self._contratos = list(contratos)
         self._erros_persistencia = []
@@ -336,25 +344,39 @@ class RelatorioController:
             self._relatorio = None
             self._pares = []
             raise ControllerError(_MSG_BANCO) from exc
+
+        if documentos is not None and self._contrato_repo is not None:
+            ids = self._persistir(documentos)
+        elif registro_ids is not None:
+            ids = list(registro_ids)
+        else:
+            ids = [None] * len(self._contratos)
+
         # self._pares alimenta APENAS o Painel (linhas_painel/indices_disponiveis/
         # filtrar) — linhas sem nenhum dado útil são omitidas aqui para não expor
         # uma linha em branco na tabela on-screen. O ``Relatorio`` de domínio
         # (self._relatorio, usado por exportar()/resumo_conformidade()) mantém
         # TODOS os contratos processados, sem filtro: exportação e conformidade
         # nunca escondem silenciosamente que um arquivo não foi reconhecido (§6).
-        pares = zip(self._relatorio.contratos.linhas, self._contratos, strict=True)
-        self._pares = [(linha, c) for linha, c in pares if not _linha_vazia(linha)]
+        pares = zip(self._relatorio.contratos.linhas, self._contratos, ids, strict=True)
+        self._pares = [
+            (linha, c, rid) for linha, c, rid in pares if not _linha_vazia(linha)
+        ]
 
-        if documentos is not None and self._contrato_repo is not None:
-            self._persistir(documentos)
+    def _persistir(self, documentos: list[DocumentoTexto]) -> list[str | None]:
+        """Grava cada contrato e devolve os ids (mesma ordem de ``self._contratos``).
 
-    def _persistir(self, documentos: list[DocumentoTexto]) -> None:
+        Item cuja gravação falhar entra como ``None`` na posição correspondente
+        e o motivo é acumulado em :meth:`erros_persistencia` — falha de um item
+        não aborta o restante do lote (degradação graciosa, §6).
+        """
         assert self._relatorio is not None  # garantido pelo caller (definir_contratos)
         itens = zip(documentos, self._contratos, self._relatorio.contratos.linhas, strict=True)
+        ids: list[str | None] = []
         for doc, contrato, linha in itens:
             arquivo_nome = Path(doc.caminho).name
             try:
-                self._contrato_repo.salvar(  # type: ignore[union-attr]
+                registro = self._contrato_repo.salvar(  # type: ignore[union-attr]
                     arquivo_nome=arquivo_nome,
                     arquivo_hash=doc.hash,
                     contrato=contrato,
@@ -363,6 +385,10 @@ class RelatorioController:
                 )
             except RepositoryError as exc:
                 self._erros_persistencia.append((arquivo_nome, str(exc)))
+                ids.append(None)
+            else:
+                ids.append(registro.id)
+        return ids
 
     def erros_persistencia(self) -> list[tuple[str, str]]:
         """Itens cuja gravação no histórico falhou na última chamada.
@@ -378,7 +404,9 @@ class RelatorioController:
 
         Não repassa ``documentos`` a :meth:`definir_contratos` — os contratos
         vêm do banco, não de um processamento de pasta, então não devem ser
-        regravados. Falha ao listar (banco indisponível) é degradação
+        regravados. Repassa ``registro_ids`` (o ``id`` de cada
+        ``RegistroContrato``) para que o Painel saiba qual registro excluir por
+        linha (§Fase 3). Falha ao listar (banco indisponível) é degradação
         graciosa: o app simplesmente abre sem histórico, sem lançar.
         """
         if self._contrato_repo is None:
@@ -387,10 +415,35 @@ class RelatorioController:
             registros = self._contrato_repo.listar()
         except RepositoryError:
             return
-        self.definir_contratos([r.contrato for r in registros])
+        self.definir_contratos(
+            [r.contrato for r in registros], registro_ids=[r.id for r in registros]
+        )
 
     def tem_dados(self) -> bool:
         return self._relatorio is not None
+
+    def excluir_contrato(self, registro_id: str) -> None:
+        """Exclui um contrato persistido e recarrega o Painel a partir do banco."""
+        if self._contrato_repo is None:
+            raise ControllerError("Sem repositório de contratos configurado.")
+        try:
+            removido = self._contrato_repo.excluir(registro_id)
+        except RepositoryError as exc:
+            raise ControllerError(_MSG_BANCO) from exc
+        if not removido:
+            raise ControllerError("Contrato não encontrado (já pode ter sido removido).")
+        self.carregar_historico()
+
+    def excluir_todos_contratos(self) -> int:
+        """Exclui TODOS os contratos persistidos e recarrega (Painel fica vazio)."""
+        if self._contrato_repo is None:
+            raise ControllerError("Sem repositório de contratos configurado.")
+        try:
+            total = self._contrato_repo.excluir_todos()
+        except RepositoryError as exc:
+            raise ControllerError(_MSG_BANCO) from exc
+        self.carregar_historico()
+        return total
 
     # -- Painel (Relatório 01) --------------------------------------------- #
     @staticmethod
@@ -398,7 +451,9 @@ class RelatorioController:
         return linha.dados_incompletos or contrato.necessita_revisao
 
     @staticmethod
-    def _linha_painel(linha: LinhaContrato, contrato: Contrato) -> LinhaPainel:
+    def _linha_painel(
+        linha: LinhaContrato, contrato: Contrato, registro_id: str | None
+    ) -> LinhaPainel:
         return LinhaPainel(
             locatario=linha.locatario_nome or "",
             locador=linha.locador_nome or "",
@@ -410,15 +465,16 @@ class RelatorioController:
             automatico=_sim_nao(linha.reajuste_automatico),
             vencimento=formatar_data_br(linha.vencimento),
             revisao=RelatorioController._precisa_revisao(linha, contrato),
+            registro_id=registro_id,
         )
 
     def linhas_painel(self) -> list[LinhaPainel]:
         """Todas as linhas do Painel (ordem de entrada dos contratos)."""
-        return [self._linha_painel(linha, c) for linha, c in self._pares]
+        return [self._linha_painel(linha, c, rid) for linha, c, rid in self._pares]
 
     def indices_disponiveis(self) -> list[str]:
         """Índices de reajuste distintos presentes (para o dropdown de filtro)."""
-        indices = {linha.indice for linha, _ in self._pares if linha.indice}
+        indices = {linha.indice for linha, _, _ in self._pares if linha.indice}
         return sorted(indices)
 
     def filtrar(
@@ -438,7 +494,7 @@ class RelatorioController:
         alvo = (texto or "").strip().lower()
         indice_alvo = (indice or "").strip().lower()
         resultado: list[LinhaPainel] = []
-        for linha, contrato in self._pares:
+        for linha, contrato, registro_id in self._pares:
             if indice_alvo and (linha.indice or "").lower() != indice_alvo:
                 continue
             if apenas_automatico is not None and linha.reajuste_automatico != apenas_automatico:
@@ -457,7 +513,7 @@ class RelatorioController:
                 ).lower()
                 if alvo not in campos:
                     continue
-            resultado.append(self._linha_painel(linha, contrato))
+            resultado.append(self._linha_painel(linha, contrato, registro_id))
         return resultado
 
     # -- Conformidade (Relatório 02) --------------------------------------- #

@@ -256,6 +256,9 @@ class MainWindow(ctk.CTk):
         ctk.CTkButton(filtros, text="Limpar", command=self._limpar_filtros).pack(
             side="left", padx=4
         )
+        ctk.CTkButton(
+            filtros, text="Limpar tudo", fg_color=_COR_ERRO, command=self._on_limpar_tudo
+        ).pack(side="left", padx=4)
 
         self._tabela_painel = ctk.CTkScrollableFrame(
             self._tab_painel, label_text="Relatório 01 — Contratos processados"
@@ -287,7 +290,7 @@ class MainWindow(ctk.CTk):
             w.destroy()
         cabecalhos = [
             "Locatário", "Locador", "Valor", "IRRF", "Redução IRRF", "Índice",
-            "Próx. Reajuste", "Auto?", "Vencimento", "Revisão",
+            "Próx. Reajuste", "Auto?", "Vencimento", "Revisão", "Ações",
         ]
         for col, texto in enumerate(cabecalhos):
             ctk.CTkLabel(
@@ -306,6 +309,41 @@ class MainWindow(ctk.CTk):
                 ctk.CTkLabel(
                     self._tabela_painel, text=valor, anchor="w", text_color=cor
                 ).grid(row=i, column=col, sticky="w", padx=6, pady=2)
+            if linha.registro_id is not None:
+                ctk.CTkButton(
+                    self._tabela_painel,
+                    text="Excluir",
+                    fg_color=_COR_ERRO,
+                    width=70,
+                    command=lambda rid=linha.registro_id: self._on_excluir_contrato(rid),
+                ).grid(row=i, column=len(cabecalhos) - 1, sticky="w", padx=6, pady=2)
+
+    def _on_excluir_contrato(self, registro_id: str) -> None:
+        if not messagebox.askyesno(
+            "Excluir contrato",
+            "Excluir este contrato do histórico? Esta ação não pode ser desfeita.",
+        ):
+            return
+        try:
+            self._c.relatorio.excluir_contrato(registro_id)
+        except ControllerError as exc:
+            messagebox.showerror("Excluir contrato", str(exc))
+            return
+        self._recarregar_painel()
+
+    def _on_limpar_tudo(self) -> None:
+        if not messagebox.askyesno(
+            "Limpar tudo",
+            "Isto vai excluir PERMANENTEMENTE todos os contratos do histórico. "
+            "Esta ação não pode ser desfeita. Continuar?",
+        ):
+            return
+        try:
+            self._c.relatorio.excluir_todos_contratos()
+        except ControllerError as exc:
+            messagebox.showerror("Limpar tudo", str(exc))
+            return
+        self._recarregar_painel()
 
     # ------------------------------------------------------------------ #
     # Aba Conformidade (Relatório 02)

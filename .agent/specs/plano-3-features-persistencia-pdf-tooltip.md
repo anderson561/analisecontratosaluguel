@@ -45,7 +45,7 @@
 - **Agente sugerido:** `xp-coach`.
 
 ### Fase 4 — Relatório PDF
-- Sem implementação — feature já existe (botão "Exportar PDF…", aba Conformidade). Só validar com você, ao testar o `.exe` rebuildado desta rodada, que o botão atual atende.
+- **Concluída (sem código) em 2026-08-07.** Feature já existe (botão "Exportar PDF…", aba Conformidade) — nada foi alterado. Validação final acontece quando você testar o `.exe` reconstruído ao fim das fases restantes.
 
 ### Fase 5 — Tooltip em "Revisar"
 - Implementação manual (bind `<Enter>`/`<Leave>` + `Toplevel` sem decoração, padrão comum em Tkinter/CustomTkinter) na célula "Revisão" do Painel (`main_window.py:298`) — **recomendado não adicionar dependência nova** (ex. `CTkToolTip`) para uma única tooltip; ajusto se preferir a lib.

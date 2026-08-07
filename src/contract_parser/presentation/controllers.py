@@ -104,6 +104,8 @@ class LinhaPainel:
 
     ``revisao`` sinaliza destaque visual: contrato com dado incompleto (IRRF não
     calculável) ou qualquer campo marcado para conferência manual (§6).
+    ``motivo_revisao`` explica qual dessas causas (uma ou ambas) se aplica —
+    string vazia quando ``revisao`` é ``False`` (tooltip da coluna "Revisão").
     """
 
     locatario: str
@@ -116,6 +118,7 @@ class LinhaPainel:
     automatico: str
     vencimento: str
     revisao: bool
+    motivo_revisao: str
     registro_id: str | None
 
 
@@ -451,6 +454,26 @@ class RelatorioController:
         return linha.dados_incompletos or contrato.necessita_revisao
 
     @staticmethod
+    def _motivo_revisao(linha: LinhaContrato, contrato: Contrato) -> str:
+        """Explica POR QUE a linha precisa de revisão (§Fase 5 do plano).
+
+        As duas causas de ``_precisa_revisao`` são distintas e ambas podem
+        ocorrer ao mesmo tempo — o texto as diferencia em vez de um "revisar"
+        genérico: dados essenciais faltando para o IRRF vs. campo(s)
+        extraído(s) com baixa confiança (:attr:`Contrato.campos_para_revisao`).
+        """
+        motivos = []
+        if linha.dados_incompletos:
+            motivos.append(
+                "dados incompletos para o IRRF (falta o valor do aluguel ou não "
+                "foi possível calcular)"
+            )
+        if contrato.necessita_revisao:
+            campos = ", ".join(contrato.campos_para_revisao)
+            motivos.append(f"campo(s) extraído(s) com baixa confiança: {campos}")
+        return "; ".join(motivos)
+
+    @staticmethod
     def _linha_painel(
         linha: LinhaContrato, contrato: Contrato, registro_id: str | None
     ) -> LinhaPainel:
@@ -465,6 +488,7 @@ class RelatorioController:
             automatico=_sim_nao(linha.reajuste_automatico),
             vencimento=formatar_data_br(linha.vencimento),
             revisao=RelatorioController._precisa_revisao(linha, contrato),
+            motivo_revisao=RelatorioController._motivo_revisao(linha, contrato),
             registro_id=registro_id,
         )
 

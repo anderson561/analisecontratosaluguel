@@ -15,6 +15,7 @@ Acessibilidade/UX (skill ux-ui-designer-pro):
 """
 from __future__ import annotations
 
+import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
@@ -26,6 +27,51 @@ from contract_parser.presentation.controllers import AppController, ControllerEr
 _COR_REVISAO = "#8A5A00"
 _COR_OK = "#1B5E20"
 _COR_ERRO = "#B00020"
+
+
+class _Tooltip:
+    """Tooltip simples de hover (bind Enter/Leave + Toplevel sem decoração).
+
+    Não depende de nenhuma lib externa — primeira implementação do tipo neste
+    projeto (ver .agent/specs/plano-3-features-persistencia-pdf-tooltip.md,
+    Fase 5). Só liga o hover quando há texto (evita bind inútil em células
+    sem motivo de revisão) e destrói a janela ao sair, para não deixar a
+    tooltip "grudada" na tela quando o mouse sai do widget.
+    """
+
+    def __init__(self, widget: ctk.CTkBaseClass, texto: str) -> None:
+        self._widget = widget
+        self._texto = texto
+        self._janela: tk.Toplevel | None = None
+        if texto:
+            widget.bind("<Enter>", self._mostrar)
+            widget.bind("<Leave>", self._esconder)
+
+    def _mostrar(self, event: object = None) -> None:
+        if self._janela is not None:
+            return
+        x = self._widget.winfo_rootx() + 12
+        y = self._widget.winfo_rooty() + self._widget.winfo_height() + 4
+        self._janela = tk.Toplevel(self._widget)
+        self._janela.wm_overrideredirect(True)
+        self._janela.wm_geometry(f"+{x}+{y}")
+        tk.Label(
+            self._janela,
+            text=self._texto,
+            background="#FFFFE0",
+            foreground="#000000",
+            relief="solid",
+            borderwidth=1,
+            justify="left",
+            wraplength=360,
+            padx=6,
+            pady=4,
+        ).pack()
+
+    def _esconder(self, event: object = None) -> None:
+        if self._janela is not None:
+            self._janela.destroy()
+            self._janela = None
 
 
 class MainWindow(ctk.CTk):
@@ -296,6 +342,7 @@ class MainWindow(ctk.CTk):
             ctk.CTkLabel(
                 self._tabela_painel, text=texto, font=ctk.CTkFont(weight="bold")
             ).grid(row=0, column=col, sticky="w", padx=6, pady=4)
+        col_revisao = cabecalhos.index("Revisão")
         for i, linha in enumerate(linhas, start=1):
             # Destaque de revisão: ícone + texto + cor (nunca cor isolada).
             revisao_txt = "⚠ revisar" if linha.revisao else "ok"
@@ -306,9 +353,14 @@ class MainWindow(ctk.CTk):
                 revisao_txt,
             ]
             for col, valor in enumerate(celulas):
-                ctk.CTkLabel(
+                label = ctk.CTkLabel(
                     self._tabela_painel, text=valor, anchor="w", text_color=cor
-                ).grid(row=i, column=col, sticky="w", padx=6, pady=2)
+                )
+                label.grid(row=i, column=col, sticky="w", padx=6, pady=2)
+                if col == col_revisao:
+                    # Tooltip explica o motivo específico da linha (§Fase 5) —
+                    # só liga o hover quando há motivo (texto vazio = sem-op).
+                    _Tooltip(label, linha.motivo_revisao)
             if linha.registro_id is not None:
                 ctk.CTkButton(
                     self._tabela_painel,

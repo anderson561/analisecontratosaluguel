@@ -352,6 +352,48 @@ def test_linha_incompleta_marca_revisao():
     assert ctrl.linhas_painel()[0].revisao is True
 
 
+def test_motivo_revisao_dados_incompletos_nao_menciona_baixa_confianca():
+    """Motivo 1 (dados_incompletos) sem motivo 2 (baixa confiança) presente."""
+    ctrl = _relatorio_controller([_contrato_incompleto()])
+    motivo = ctrl.linhas_painel()[0].motivo_revisao.lower()
+    assert "irrf" in motivo or "aluguel" in motivo
+    assert "baixa confiança" not in motivo
+
+
+def test_motivo_revisao_cita_campos_de_baixa_confianca():
+    """Motivo 2 (necessita_revisao) cita exatamente os campos de
+    ``contrato.campos_para_revisao`` — sem dados_incompletos envolvido.
+    """
+    contrato = _contrato_baixa_confianca()
+    ctrl = _relatorio_controller([contrato])
+    motivo = ctrl.linhas_painel()[0].motivo_revisao
+    assert contrato.campos_para_revisao  # a fixture realmente marca >=1 campo
+    for campo in contrato.campos_para_revisao:
+        assert campo in motivo
+
+
+def test_motivo_revisao_combina_ambos_motivos_simultaneos():
+    contrato = Contrato(
+        locador=Parte(tipo=TipoParte.PF, nome="Fulano"),
+        locatario=Parte(tipo=TipoParte.PJ, nome="Delta ME", documento=CNPJ_X),
+        valor_aluguel=None,
+        memoria_extracao={
+            "locador_nome": RegistroCampo(
+                origem=OrigemExtracao.LLM, confianca=0.3, necessita_revisao=True
+            )
+        },
+    )
+    ctrl = _relatorio_controller([contrato])
+    motivo = ctrl.linhas_painel()[0].motivo_revisao.lower()
+    assert "irrf" in motivo or "aluguel" in motivo
+    assert "locador_nome" in motivo
+
+
+def test_motivo_revisao_vazio_quando_nao_precisa_revisao():
+    ctrl = _relatorio_controller([_contrato_pf_pj()])
+    assert ctrl.linhas_painel()[0].motivo_revisao == ""
+
+
 def test_linhas_painel_oculta_linha_totalmente_vazia():
     """Regressão (screenshot do usuário): arquivo do qual nada foi extraído não
     pode virar uma linha em branco no Painel (sem Locatário/Locador/Índice,

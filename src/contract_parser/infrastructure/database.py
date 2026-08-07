@@ -88,11 +88,12 @@ def reset_connection() -> None:
 
 
 def init_schema(conn: sqlite3.Connection) -> None:
-    """Cria as tabelas ``empresas`` e ``tabela_irrf`` se ainda não existirem.
+    """Cria as tabelas ``empresas``, ``tabela_irrf`` e ``contratos`` se ainda
+    não existirem.
 
     ``CREATE TABLE IF NOT EXISTS`` — idempotente, sem migração versionada
-    (YAGNI para duas tabelas, ver ADR-002). Chamada tanto pela composição de
-    produção quanto pelos repositórios/testes, sem custo relevante em reexecução.
+    (YAGNI, ver ADR-002). Chamada tanto pela composição de produção quanto
+    pelos repositórios/testes, sem custo relevante em reexecução.
     """
     try:
         conn.executescript(
@@ -114,6 +115,17 @@ def init_schema(conn: sqlite3.Connection) -> None:
                 base_legal TEXT NOT NULL,
                 validado INTEGER NOT NULL DEFAULT 0,
                 validado_em TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS contratos (
+                id TEXT PRIMARY KEY,
+                arquivo_nome TEXT NOT NULL,
+                arquivo_hash TEXT NOT NULL UNIQUE,
+                processado_em TEXT NOT NULL,
+                revisao INTEGER NOT NULL DEFAULT 0,
+                arquivo_ausente INTEGER NOT NULL DEFAULT 0,
+                contrato_json TEXT NOT NULL,
+                linha_json TEXT NOT NULL
             );
             """
         )

@@ -19,16 +19,28 @@ Regras de negócio (§4 dos requisitos, D5 do ADR-001):
 Base 2026: Lei nº 15.191/2025, vigência a partir de jan/2026 (ver
 :func:`tabela_irrf_2026`). Valores fornecidos pela RFB via PM/Orquestrador.
 
+Desconto simplificado (Lei nº 14.663/2023, art. 6º) — ATIVO (ADR-004):
+    Para Locador PF, a base do aluguel sofre o desconto simplificado de
+    R$ 607,20/mês **incondicionalmente** (independe de valor ou de qualquer
+    outro dado), ANTES de localizar a faixa da tabela progressiva e calcular
+    o imposto. A decisão anterior (ADR-003 §3), de que esse desconto seria
+    "exclusivo da retenção sobre salário", **estava errada** (fonte
+    secundária) — corrigida com fonte primária (MAFON 2025, código de
+    retenção 3208) e documentada em
+    ``.agent/specs/adr-004-desconto-simplificado-aluguel.md``.
+
 Redutor da Lei nº 15.270/2025 (Art. 3º-A da Lei nº 9.250/1995) — ATIVO:
     A partir de jan/2026, uma **redução adicional** é aplicada sobre o imposto
-    já calculado pela tabela progressiva padrão, para rendimentos mensais de
-    até R$ 7.350,00 (:func:`calcular_reducao_lei_15270`). ``calcular_irrf``
-    aplica essa redução automaticamente (Locador PF), antes do arredondamento
-    final. A fórmula, a fonte legal e os exemplos numéricos de conferência
-    estão documentados em ``.agent/specs/adr-003-redutor-irrf-2026.md``
-    (decisão registrada: aluguel não tem direito ao desconto simplificado que
-    o salário tem, então o CA-03 em base R$ 5.000,00 é R$ 153,38 — não R$ 0,00
-    nem R$ 466,27).
+    já calculado pela tabela progressiva padrão (sobre a base TRIBUTÁVEL, já
+    com o desconto simplificado acima), para rendimentos mensais **brutos**
+    de até R$ 7.350,00 (:func:`calcular_reducao_lei_15270` — recebe o
+    rendimento bruto, sem o desconto simplificado). ``calcular_irrf`` aplica
+    essa redução automaticamente (Locador PF), antes do arredondamento final.
+    A fórmula, a fonte legal e os exemplos numéricos de conferência estão
+    documentados em ``.agent/specs/adr-003-redutor-irrf-2026.md`` (o redutor
+    em si continua válido e inalterado; apenas a premissa sobre o desconto
+    simplificado foi corrigida pelo ADR-004). Com os dois mecanismos
+    combinados, o CA-03 em base R$ 5.000,00 é R$ 0,00 (não mais R$ 153,38).
 """
 from __future__ import annotations
 
@@ -43,6 +55,10 @@ from contract_parser.domain.contrato import TipoParte
 # Quantum monetário: 2 casas decimais (centavos).
 _CENTAVO = Decimal("0.01")
 _ZERO = Decimal("0.00")
+
+# Desconto simplificado do aluguel (Locador PF), incondicional em valor.
+# Lei nº 14.663/2023, art. 6º — ver ADR-004.
+_DESCONTO_SIMPLIFICADO_ALUGUEL = Decimal("607.20")
 
 
 def _arredondar_moeda(valor: Decimal) -> Decimal:
@@ -149,6 +165,12 @@ class ResultadoIRRF(BaseModel):
     # `imposto == imposto_antes_reducao - reducao_aplicada` sempre que retido.
     imposto_antes_reducao: Decimal = _ZERO
     reducao_aplicada: Decimal = _ZERO
+    # Memória de cálculo do desconto simplificado (ADR-004): o valor cheio do
+    # aluguel (antes de qualquer desconto — é o que o redutor da Lei nº
+    # 15.270/2025 usa) e o desconto simplificado efetivamente aplicado
+    # (R$ 607,20 para Locador PF, R$ 0,00 para Locador PJ).
+    rendimento_bruto: Decimal = _ZERO
+    desconto_simplificado_aplicado: Decimal = _ZERO
 
 
 def calcular_irrf(
@@ -169,12 +191,20 @@ def calcular_irrf(
     tabela:
         :class:`TabelaIRRF` vigente (injetada pela infraestrutura).
 
+    Desconto simplificado (ADR-004): para Locador PF, R$ 607,20 são abatidos
+    da base ANTES de localizar a faixa da tabela progressiva e calcular o
+    imposto (incondicional, Lei nº 14.663/2023, art. 6º).
+
     Redutor da Lei nº 15.270/2025: para Locador PF, o redutor progressivo para
-    rendimentos ≤ R$ 7.350,00 (:func:`calcular_reducao_lei_15270`) é aplicado
-    sobre o imposto da tabela padrão, antes do arredondamento final. Ver
-    ADR-003 para a fórmula e os valores de referência.
+    rendimentos **brutos** ≤ R$ 7.350,00 (:func:`calcular_reducao_lei_15270`)
+    é aplicado sobre o imposto da tabela padrão (já calculado sobre a base
+    tributável, com o desconto simplificado), antes do arredondamento final.
+    Ver ADR-003 para a fórmula e ADR-004 para os valores de referência
+    combinados.
     """
     base = _arredondar_moeda(base_mensal)
+    if base < _ZERO:
+        raise ValueError("Base de cálculo do IRRF não pode ser negativa.")
 
     # Regra de negócio: retenção só em Locador PF × Locatário PJ.
     if tipo_locador is TipoParte.PJ:
@@ -194,34 +224,50 @@ def calcular_irrf(
             ),
             imposto_antes_reducao=_ZERO,
             reducao_aplicada=_ZERO,
+            rendimento_bruto=base,
+            desconto_simplificado_aplicado=_ZERO,
         )
 
-    faixa = tabela.faixa_para(base)
-    bruto = base * faixa.aliquota - faixa.deducao
+    # Desconto simplificado (ADR-004): abatido da base ANTES da tabela.
+    base_tributavel = _arredondar_moeda(
+        max(_ZERO, base - _DESCONTO_SIMPLIFICADO_ALUGUEL)
+    )
+
+    faixa = tabela.faixa_para(base_tributavel)
+    bruto = base_tributavel * faixa.aliquota - faixa.deducao
     # Nunca negativo (faixa isenta ou arredondamento de fronteira).
     imposto_antes_reducao = _arredondar_moeda(max(_ZERO, bruto))
 
-    # Redutor da Lei nº 15.270/2025 (Art. 3º-A) — aplicado ao imposto já
-    # calculado pela tabela padrão, nunca gera imposto negativo (ADR-003).
+    # Redutor da Lei nº 15.270/2025 (Art. 3º-A) — calculado sobre o
+    # rendimento BRUTO (sem o desconto simplificado, ADR-003 mantido),
+    # aplicado ao imposto já calculado pela tabela padrão, nunca gera imposto
+    # negativo.
     reducao_teorica = calcular_reducao_lei_15270(base)
     imposto = _arredondar_moeda(max(_ZERO, imposto_antes_reducao - reducao_teorica))
     reducao_aplicada = imposto_antes_reducao - imposto
 
+    prefixo = (
+        f"Rendimento bruto de {base}, desconto simplificado de "
+        f"{_DESCONTO_SIMPLIFICADO_ALUGUEL} → base tributável {base_tributavel}."
+    )
     if faixa.isenta:
-        observacao = "Faixa isenta: IRRF = R$ 0,00."
+        observacao = f"{prefixo} Faixa isenta: IRRF = R$ 0,00."
     elif reducao_aplicada > _ZERO:
         observacao = (
-            f"IRRF = {base} × {faixa.aliquota} − {faixa.deducao} = "
-            f"{imposto_antes_reducao}; reduzido em {reducao_aplicada} pela "
-            f"Lei nº 15.270/2025 → {imposto}."
+            f"{prefixo} IRRF = {base_tributavel} × {faixa.aliquota} − "
+            f"{faixa.deducao} = {imposto_antes_reducao}; reduzido em "
+            f"{reducao_aplicada} pela Lei nº 15.270/2025 → {imposto}."
         )
     else:
-        observacao = f"IRRF = {base} × {faixa.aliquota} − {faixa.deducao} = {imposto}."
+        observacao = (
+            f"{prefixo} IRRF = {base_tributavel} × {faixa.aliquota} − "
+            f"{faixa.deducao} = {imposto}."
+        )
 
     return ResultadoIRRF(
         retido=imposto > 0,
         imposto=imposto,
-        base_calculo=base,
+        base_calculo=base_tributavel,
         aliquota=faixa.aliquota,
         deducao=faixa.deducao,
         faixa_descricao=faixa.descricao,
@@ -231,6 +277,8 @@ def calcular_irrf(
         observacao=observacao,
         imposto_antes_reducao=imposto_antes_reducao,
         reducao_aplicada=reducao_aplicada,
+        rendimento_bruto=base,
+        desconto_simplificado_aplicado=_DESCONTO_SIMPLIFICADO_ALUGUEL,
     )
 
 
@@ -244,9 +292,11 @@ _REDUCAO_COEFICIENTE_LINEAR = Decimal("0.133145")
 def calcular_reducao_lei_15270(rendimento: Decimal) -> Decimal:
     """Redutor de IRRF da Lei nº 15.270/2025 (Art. 3º-A da Lei nº 9.250/1995).
 
-    Redução do imposto mensal, calculada sobre o **rendimento tributável**
-    (aqui, ``base_mensal`` do aluguel — sem desconto simplificado prévio, que
-    não se aplica a esta modalidade; ver ADR-003 §3):
+    Redução do imposto mensal, calculada sobre o **rendimento bruto** (aqui,
+    ``base_mensal`` do aluguel, ANTES de qualquer desconto — o desconto
+    simplificado de R$ 607,20 existe e é aplicado à base ANTES da tabela
+    progressiva [ADR-004], mas este redutor continua usando o rendimento
+    bruto, sem esse desconto, exatamente como especificado no Art. 3º-A):
 
     - ``rendimento <= R$ 5.000,00``: redução fixa de R$ 312,89.
     - ``R$ 5.000,01 <= rendimento <= R$ 7.350,00``:

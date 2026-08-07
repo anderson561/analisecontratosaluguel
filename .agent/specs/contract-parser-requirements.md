@@ -53,7 +53,7 @@ Além dos campos do PRD, o especialista de Direito Imobiliário exige capturar:
 ## 7. Critérios de Aceitação (rastreamento ao PRD)
 - [x] **CA-01** — Importar `.xlsx` com 50 empresas → 50 registros na tabela `empresas` (SQLite) + listagem na GUI. **Validado fim-a-fim com banco SQLite real** (migração ADR-002, M6).
 - [ ] ~~**CA-02** — Docker~~ → **DEFERIDO** (Docker fora do escopo; ambiente local nativo).
-- [ ] **CA-03** — Aluguel PF→PJ de R$ 5.000,00 → alíquota + dedução da tabela 2026 + memória de cálculo. **Atualizado:** desde a ativação do redutor da Lei nº 15.270/2025 (Art. 3º-A, ver ADR-003), o imposto final esperado passa a ser **R$ 153,38** (tabela padrão R$ 466,27 menos o redutor de R$ 312,89) — não mais R$ 466,27.
+- [ ] **CA-03** — Aluguel PF→PJ de R$ 5.000,00 → alíquota + dedução da tabela 2026 + memória de cálculo. **Atualizado (ADR-004):** o desconto simplificado de R$607,20 também se aplica ao aluguel (base tributável R$4.392,80), o que zera integralmente o imposto após o redutor da Lei nº 15.270/2025 — imposto final esperado passa a ser **R$ 0,00** (não mais R$ 153,38 do ADR-003, nem R$ 466,27 original).
 - [ ] **CA-04** — Empresas A,B,C cadastradas; só A,B na pasta → status individual + alerta de ausência de C.
 - [ ] **CA-05 (novo)** — Contrato com índice atrelado a salário mínimo → flag de cláusula vedada (Art. 18).
 - [ ] **CA-06 (novo)** — Contrato com 2 garantias → flag de violação do Art. 37.

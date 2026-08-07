@@ -1,6 +1,8 @@
 # ADR-003 — Redutor de IRRF 2026 (Lei nº 15.270/2025) sobre Aluguel
 
-> **Data:** 2026-08-06 · **Status:** Aceito · **Complementa:** ADR-001 (D5), tabela padrão da Lei nº 15.191/2025
+> **Data:** 2026-08-06 · **Status:** Aceito (§1, §2, §4-redutor) · **Revisado por [[adr-004-desconto-simplificado-aluguel|ADR-004]]** (§3 e a tabela de referência) · **Complementa:** ADR-001 (D5), tabela padrão da Lei nº 15.191/2025
+>
+> **⚠️ Nota de revisão (2026-08-07):** a conclusão do §3 abaixo — de que o desconto simplificado de R$607,20 não se aplica ao aluguel — **estava errada** (baseada em fonte secundária). O ADR-004 corrige isso com fonte primária (MAFON 2025, código 3208) e traz a tabela de referência atualizada. O redutor da Lei nº 15.270/2025 em si (fórmula, uso do rendimento bruto) continua válido e inalterado.
 
 ## 1. Contexto
 

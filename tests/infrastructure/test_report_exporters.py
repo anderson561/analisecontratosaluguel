@@ -114,9 +114,11 @@ def test_excel_gera_duas_abas_com_cabecalhos_e_valores(tmp_path):
     # Primeira linha de dados: Alpha, valor e IRRF formatados em pt-BR.
     assert contratos["A2"].value == "Alpha Comercio LTDA"
     assert contratos["D2"].value == "R$ 5.000,00"
-    # 466,27 (tabela) reduzido a 153,38 pelo redutor da Lei nº 15.270/2025 (ADR-003).
-    assert contratos["E2"].value == "R$ 153,38"
-    # Coluna nova: valor da redução aplicada (466,27 − 153,38 = 312,89).
+    # Desconto simplificado (ADR-004): base tributável 4.392,80 -> tabela
+    # R$312,89 (0,225 - 675,49) reduzida a R$0,00 pelo redutor da Lei nº
+    # 15.270/2025 (ADR-003), sobre o rendimento bruto de R$5.000,00.
+    assert contratos["E2"].value == "R$ 0,00"
+    # Coluna nova: valor da redução aplicada (igual à tabela nesta base: 312,89).
     assert contratos["F2"].value == "R$ 312,89"
     assert contratos["I2"].value == "Sim"
     assert contratos["J2"].value == "10/10/2028"
@@ -124,11 +126,11 @@ def test_excel_gera_duas_abas_com_cabecalhos_e_valores(tmp_path):
     assert contratos["E3"].value == "R$ 0,00"
     assert contratos["F3"].value == "R$ 0,00"
 
-    # Rodapé: total de IRRF retido (153,38 + 0,00) e total de redução (312,89 + 0,00).
+    # Rodapé: total de IRRF retido (0,00 + 0,00) e total de redução (312,89 + 0,00).
     linhas_valores = list(contratos.iter_rows(values_only=True))
     total_row = linhas_valores[-1]
     assert total_row[0] == "TOTAL"
-    assert total_row[4] == "R$ 153,38"
+    assert total_row[4] == "R$ 0,00"
     assert total_row[5] == "R$ 312,89"
 
     conformidade = wb["Conformidade"]
@@ -168,9 +170,10 @@ def test_pdf_gera_arquivo_nao_trivial_com_texto_esperado(tmp_path):
         doc.close()
     assert "Relatório de Contratos de Locação" in texto
     assert "Alpha Comercio LTDA" in texto
-    # 466,27 (tabela) reduzido a 153,38 pelo redutor da Lei nº 15.270/2025 (ADR-003).
-    assert "R$ 153,38" in texto
-    # Coluna nova: valor da redução aplicada (466,27 − 153,38 = 312,89).
+    # Desconto simplificado (ADR-004) + redutor da Lei nº 15.270/2025
+    # (ADR-003) zeram o imposto final da linha PF (base R$5.000,00).
+    assert "R$ 0,00" in texto
+    # Coluna nova: valor da redução aplicada (igual à tabela nesta base: 312,89).
     assert "Redução IRRF" in texto
     assert "R$ 312,89" in texto
     assert PENDENCIA in texto

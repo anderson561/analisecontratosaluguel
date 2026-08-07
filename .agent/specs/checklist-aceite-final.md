@@ -99,6 +99,18 @@ status, prova (teste/arquivo) e commit onde foi implementado.
 > **Commits:** `bb5491e` (ativação do redutor no domínio) e (este commit)
 > (visibilidade da redução no Painel/relatórios + documentação).
 
+> ⚠️ **Atualização (2026-08-07, ADR-004):** a ressalva acima ("aluguel não tem
+> direito ao desconto simplificado que o salário tem") **estava errada**
+> (baseada em fonte secundária) — corrigida com fonte primária (MAFON 2025,
+> código de retenção 3208). O desconto simplificado de R$607,20 (Lei nº
+> 14.663/2023, art. 6º) passa a ser aplicado, incondicionalmente, à base do
+> aluguel ANTES da tabela progressiva, para locador PF. O CA-03 (base
+> R$ 5.000,00) deixa de esperar **R$ 153,38** e passa a esperar **R$ 0,00**
+> (base tributável R$4.392,80 → tabela R$312,89 → redutor da Lei nº
+> 15.270/2025 sobre o rendimento bruto R$5.000,00 zera o imposto). Ver
+> [ADR-004](adr-004-desconto-simplificado-aluguel.md) para a tabela de
+> referência completa (inclui o caso R$7.800,00: R$1.236,27 → R$1.069,29).
+
 ---
 
 ## CA-04 — Contrato ausente (alerta de pendência)

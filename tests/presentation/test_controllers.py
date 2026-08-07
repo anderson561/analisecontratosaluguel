@@ -293,9 +293,11 @@ def test_linhas_painel_formatadas_ptbr():
     assert linha.locatario == "Alpha Comercio LTDA"
     assert linha.locador == "João da Silva"
     assert linha.valor == "R$ 5.000,00"
-    # 466,27 (tabela) reduzido a 153,38 pelo redutor da Lei nº 15.270/2025 (ADR-003).
-    assert linha.irrf == "R$ 153,38"
-    # Redução exposta para auditabilidade (ADR-003): 466,27 − 153,38 = 312,89.
+    # Desconto simplificado de R$607,20 (ADR-004) -> base tributável 4.392,80
+    # -> tabela R$312,89 (0,225 - 675,49) reduzida a R$0,00 pelo redutor da
+    # Lei nº 15.270/2025 (ADR-003), sobre o rendimento bruto de R$5.000,00.
+    assert linha.irrf == "R$ 0,00"
+    # Redução exposta para auditabilidade (ADR-003): igual à tabela (312,89).
     assert linha.reducao_irrf == "R$ 312,89"
     assert linha.indice == "IPCA"
     assert linha.automatico == "Sim"

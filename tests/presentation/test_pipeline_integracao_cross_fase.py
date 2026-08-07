@@ -70,10 +70,11 @@ def test_pipeline_completo_ingestao_a_painel_e_conformidade():
     app = _app()
     app.processar_pasta("qualquer/pasta")
 
-    # Fase 4+5: aluguel R$ 3.500,00, locador PF -> locatário PJ cai na faixa
-    # 15% / dedução 394,16 da tabela 2026: 3500*0.15 - 394.16 = 130,84 (tabela
-    # padrão). Rendimento <= R$5.000 -> redutor da Lei nº 15.270/2025 zera o
-    # imposto (ADR-003): 130,84 - 312,89 -> max(0, ...) = 0,00.
+    # Fase 4+5: aluguel R$ 3.500,00, locador PF -> desconto simplificado de
+    # R$607,20 (ADR-004) -> base tributável 2.892,80, que cai na faixa 15% /
+    # dedução 394,16 da tabela 2026: 2892.80*0.15 - 394.16 = 39,76 (tabela
+    # padrão). Rendimento bruto <= R$5.000 -> redutor da Lei nº 15.270/2025
+    # (ADR-003) zera o imposto: 39,76 - 312,89 -> max(0, ...) = 0,00.
     linha = app.relatorio.linhas_painel()[0]
     assert linha.locatario == "Comércio de Alimentos Boa Mesa LTDA"
     assert linha.irrf == "R$ 0,00"

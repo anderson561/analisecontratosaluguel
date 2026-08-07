@@ -85,18 +85,23 @@ def test_relatorio01_uma_linha_por_contrato_na_ordem_de_entrada():
 
 
 def test_ca03_irrf_pf_pj_base_5000():
-    """Aluguel PF→PJ de R$ 5.000,00 → tabela 466,27 (0,275 − 908,73) reduzida
-    a R$ 153,38 pelo redutor da Lei nº 15.270/2025 (ADR-003)."""
+    """Aluguel PF→PJ de R$ 5.000,00 → desconto simplificado de R$607,20
+    (Lei nº 14.663/2023, art. 6º, ADR-004) → base tributável R$4.392,80 →
+    tabela 312,89 (0,225 − 675,49) reduzida a R$ 0,00 pelo redutor da Lei nº
+    15.270/2025, sobre o rendimento BRUTO de R$5.000,00 (ADR-003)."""
     relatorio = RelatorioService(_repo()).montar([_contrato_pf_pj()])
     linha = relatorio.contratos.linhas[0]
 
     assert linha.irrf is not None
-    assert linha.irrf.retido is True
-    assert linha.irrf.aliquota == Decimal("0.275")
-    assert linha.irrf.deducao == Decimal("908.73")
-    assert linha.irrf.imposto_antes_reducao == Decimal("466.27")
-    assert linha.irrf_retido == Decimal("153.38")
-    # Redução exposta para auditabilidade (ADR-003): 466,27 − 153,38 = 312,89.
+    assert linha.irrf.retido is False
+    assert linha.irrf.aliquota == Decimal("0.225")
+    assert linha.irrf.deducao == Decimal("675.49")
+    assert linha.irrf.imposto_antes_reducao == Decimal("312.89")
+    assert linha.irrf.rendimento_bruto == Decimal("5000.00")
+    assert linha.irrf.desconto_simplificado_aplicado == Decimal("607.20")
+    assert linha.irrf_retido == Decimal("0.00")
+    # Redução exposta para auditabilidade (ADR-003): igual ao imposto da
+    # tabela nesta base (312,89), por isso o imposto final zera (ADR-004).
     assert linha.reducao_irrf == Decimal("312.89")
     assert linha.dados_incompletos is False
 
@@ -114,8 +119,9 @@ def test_locador_pj_gera_irrf_zero():
 def test_total_irrf_retido_soma_as_linhas():
     contratos = [_contrato_pf_pj(), _contrato_locador_pj()]
     relatorio = RelatorioService(_repo()).montar(contratos)
-    # 153,38 (PF, já com o redutor da Lei nº 15.270/2025) + 0,00 (PJ) = 153,38.
-    assert relatorio.contratos.total_irrf_retido == Decimal("153.38")
+    # 0,00 (PF, desconto simplificado ADR-004 + redutor Lei nº 15.270/2025
+    # zeram o imposto) + 0,00 (PJ) = 0,00.
+    assert relatorio.contratos.total_irrf_retido == Decimal("0.00")
 
 
 def test_total_reducao_irrf_soma_as_linhas():

@@ -2,7 +2,8 @@
 
 Desde a migração MongoDB -> SQLite (ADR-002), estes testes não exigem nenhum
 serviço externo. Preserva o cenário do CA-03 (tabela 2026 oficial persistida e
-recuperada, base R$ 5.000,00 PF->PJ = R$ 466,27) agora contra SQLite real.
+recuperada, base R$ 5.000,00 PF->PJ com desconto simplificado ADR-004 +
+redutor Lei nº 15.270/2025 -> imposto final R$ 0,00) agora contra SQLite real.
 """
 from __future__ import annotations
 
@@ -112,9 +113,11 @@ def test_documento_serializa_decimal_como_texto(repo):
 def test_ca03_tabela_2026_persistida_e_recuperada_em_sqlite_real():
     """Persiste a tabela oficial 2026 em SQLite real (em memória), recupera via
     ``get_vigente`` e confirma o cálculo do CA-03: base R$ 5.000,00, locador PF
-    -> locatário PJ, tabela padrão R$ 466,27 reduzida a R$ 153,38 pelo redutor
-    da Lei nº 15.270/2025 (ADR-003) — aplica a fórmula sobre a tabela
-    efetivamente lida do banco, não sobre a factory em memória)."""
+    -> locatário PJ, desconto simplificado de R$607,20 (ADR-004) leva à base
+    tributável R$4.392,80 -> tabela padrão R$312,89 reduzida a R$ 0,00 pelo
+    redutor da Lei nº 15.270/2025 (ADR-003), sobre o rendimento bruto de
+    R$5.000,00 — aplica a fórmula sobre a tabela efetivamente lida do banco,
+    não sobre a factory em memória)."""
     conn = _conexao()
     try:
         repo = TabelaIRRFRepository(conn=conn)
@@ -130,8 +133,8 @@ def test_ca03_tabela_2026_persistida_e_recuperada_em_sqlite_real():
             tabela=tabela_persistida,
         )
 
-        assert resultado.retido is True
-        assert resultado.imposto_antes_reducao == Decimal("466.27")
-        assert resultado.imposto == Decimal("153.38")
+        assert resultado.retido is False
+        assert resultado.imposto_antes_reducao == Decimal("312.89")
+        assert resultado.imposto == Decimal("0.00")
     finally:
         conn.close()

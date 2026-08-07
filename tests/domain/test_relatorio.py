@@ -45,8 +45,10 @@ def _linha(irrf: ResultadoIRRF | None) -> LinhaContrato:
 
 
 def test_reducao_irrf_expoe_o_valor_reduzido_pela_lei_15270():
-    linha = _linha(_resultado_irrf(imposto=Decimal("153.38"), reducao_aplicada=Decimal("312.89")))
-    assert linha.reducao_irrf == Decimal("312.89")
+    # Valores de referência pós ADR-004 (base R$6.000,00): tabela 574,29
+    # reduzida em 179,75 pelo redutor da Lei nº 15.270/2025 -> imposto 394,54.
+    linha = _linha(_resultado_irrf(imposto=Decimal("394.54"), reducao_aplicada=Decimal("179.75")))
+    assert linha.reducao_irrf == Decimal("179.75")
 
 
 def test_reducao_irrf_zero_quando_irrf_nao_calculado():
@@ -62,9 +64,9 @@ def test_reducao_irrf_zero_quando_sem_reducao_aplicada():
 
 def test_total_reducao_irrf_soma_as_linhas():
     linhas = [
-        _linha(_resultado_irrf(imposto=Decimal("153.38"), reducao_aplicada=Decimal("312.89"))),
+        _linha(_resultado_irrf(imposto=Decimal("394.54"), reducao_aplicada=Decimal("179.75"))),
         _linha(_resultado_irrf(imposto=Decimal("1200.00"), reducao_aplicada=Decimal("0.00"))),
         _linha(None),
     ]
     relatorio = RelatorioContratos(linhas=linhas, tabela_vigencia="2026")
-    assert relatorio.total_reducao_irrf == Decimal("312.89")
+    assert relatorio.total_reducao_irrf == Decimal("179.75")

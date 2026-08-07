@@ -41,6 +41,7 @@ from contract_parser.domain.contrato import Contrato
 from contract_parser.domain.empresa import Empresa
 from contract_parser.domain.relatorio import LinhaContrato, Relatorio, ResumoConformidade
 from contract_parser.domain.repositories import EmpresaRepositoryProtocol
+from contract_parser.domain.validation_messages import formatar_erro_validacao
 from contract_parser.infrastructure.database import HealthResult, RepositoryError, check_health
 from contract_parser.infrastructure.empresa_repository import EmpresaJaExisteError
 from contract_parser.infrastructure.report_exporters import (
@@ -49,31 +50,6 @@ from contract_parser.infrastructure.report_exporters import (
     formatar_data_br,
     formatar_moeda_brl,
 )
-
-# Rótulos amigáveis para os campos técnicos do modelo ``Empresa`` — usados para
-# traduzir ``pydantic.ValidationError`` em mensagem legível na GUI (nunca o
-# dump técnico bruto com ``value_error``/``input_value``/URL de documentação).
-_CAMPOS_AMIGAVEIS = {
-    "cnpj": "CNPJ",
-    "razao_social": "Razão Social",
-}
-
-_PREFIXO_VALUE_ERROR = "Value error, "
-
-
-def _formatar_erro_validacao(exc: ValidationError) -> str:
-    """Traduz um ``pydantic.ValidationError`` para uma frase legível em pt-BR.
-
-    Ex.: ``"CNPJ: CNPJ sem dígitos: ''.; Razão Social: String should have at
-    least 1 character"`` — sem ``type=``, ``input_value=`` ou URLs de doc.
-    """
-    partes = []
-    for erro in exc.errors():
-        campo = ".".join(str(p) for p in erro["loc"]) or "campo"
-        rotulo = _CAMPOS_AMIGAVEIS.get(campo, campo)
-        msg = erro["msg"].removeprefix(_PREFIXO_VALUE_ERROR)
-        partes.append(f"{rotulo}: {msg}")
-    return "; ".join(partes)
 
 
 def _linha_vazia(linha: LinhaContrato) -> bool:
@@ -232,7 +208,7 @@ class EmpresasController:
         except EmpresaJaExisteError as exc:
             raise ControllerError(str(exc)) from exc
         except ValidationError as exc:
-            raise ControllerError(f"Dados inválidos: {_formatar_erro_validacao(exc)}") from exc
+            raise ControllerError(f"Dados inválidos: {formatar_erro_validacao(exc)}") from exc
         except ValueError as exc:
             raise ControllerError(f"Dados inválidos: {exc}") from exc
 
@@ -251,7 +227,7 @@ class EmpresasController:
         except RepositoryError as exc:
             raise ControllerError(_MSG_BANCO) from exc
         except ValidationError as exc:
-            raise ControllerError(f"Dados inválidos: {_formatar_erro_validacao(exc)}") from exc
+            raise ControllerError(f"Dados inválidos: {formatar_erro_validacao(exc)}") from exc
         except ValueError as exc:
             raise ControllerError(f"Dados inválidos: {exc}") from exc
 

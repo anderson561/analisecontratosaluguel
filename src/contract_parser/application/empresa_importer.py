@@ -23,10 +23,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from openpyxl import load_workbook
+from pydantic import ValidationError
 
 from contract_parser.domain.cnpj import CNPJInvalidoError, normalizar_cnpj, parece_cnpj
 from contract_parser.domain.empresa import Empresa
 from contract_parser.domain.repositories import EmpresaRepositoryProtocol
+from contract_parser.domain.validation_messages import formatar_erro_validacao
 
 # Palavras-chave de cabeçalho, em ordem de prioridade, para a Razão Social.
 _RAZAO_KEYWORDS = ("razao", "social", "empresa", "nome")
@@ -251,6 +253,11 @@ class EmpresaImporter:
                     razao_social=_celula_str(razao_bruto),
                     origem_import=origem,
                 )
+            except ValidationError as exc:
+                resumo.erros.append(
+                    ErroLinha(n_linha, f"Dados inválidos: {formatar_erro_validacao(exc)}")
+                )
+                continue
             except ValueError as exc:
                 resumo.erros.append(ErroLinha(n_linha, f"Dados inválidos: {exc}"))
                 continue

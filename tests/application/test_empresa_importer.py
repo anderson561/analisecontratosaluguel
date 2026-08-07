@@ -173,3 +173,36 @@ def test_importar_xlsx_corrompido_levanta(importer, tmp_path):
     caminho.write_bytes(b"isto nao e um xlsx valido")
     with pytest.raises(ArquivoImportacaoError):
         importer.importar(caminho)
+
+
+# --------------------------------------------------------------------------- #
+# Mensagem de erro legível (sem jargão técnico do pydantic) — mesmo bug do
+# ``EmpresasController`` (ver tests/presentation/test_controllers.py), só que
+# aqui a ``ValidationError`` é capturada dentro do ``except ValueError`` do
+# importador e cai no ``ErroLinha.motivo`` exibido na aba de importação.
+# --------------------------------------------------------------------------- #
+_JARGAO_TECNICO_PROIBIDO = (
+    "validation error",
+    "value_error",
+    "input_value",
+    "For further information visit",
+    "errors.pydantic.dev",
+)
+
+
+def test_importar_linha_com_razao_social_vazia_mensagem_amigavel(importer, tmp_path):
+    from openpyxl import Workbook
+
+    caminho = tmp_path / "razao_vazia.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["CNPJ", "Razão Social"])
+    ws.append(["11222333000181", ""])
+    wb.save(caminho)
+
+    resumo = importer.importar(caminho)
+
+    assert resumo.total_erros == 1
+    motivo = resumo.erros[0].motivo.lower()
+    for jargao in _JARGAO_TECNICO_PROIBIDO:
+        assert jargao.lower() not in motivo

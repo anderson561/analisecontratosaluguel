@@ -78,7 +78,8 @@ def test_cnpj_nao_cadastrado_mas_nome_casa_via_fuzzy():
 def test_fuzzy_acima_do_limiar_com_alias():
     empresas = [_empresa(CNPJ_A, "Alpha Comercio LTDA", aliases=["Alfa Com"])]
     # Similaridade injetada: casa o alias com 90 (>= 85).
-    sim = lambda a, b: 90.0 if b == "Alfa Com" else 10.0
+    def sim(a, b):
+        return 90.0 if b == "Alfa Com" else 10.0
     resultado = casar_contrato(
         _contrato(nome="Alfa Com"), empresas, threshold=85, similaridade=sim
     )
@@ -89,7 +90,10 @@ def test_fuzzy_acima_do_limiar_com_alias():
 
 def test_fuzzy_abaixo_do_limiar_nao_encontrado():
     empresas = [_empresa(CNPJ_A, "Alpha Comercio LTDA")]
-    sim = lambda a, b: 80.0
+
+    def sim(a, b):
+        return 80.0
+
     resultado = casar_contrato(
         _contrato(nome="Coisa Aleatoria"), empresas, threshold=85, similaridade=sim
     )
@@ -101,7 +105,10 @@ def test_fuzzy_abaixo_do_limiar_nao_encontrado():
 
 def test_fuzzy_no_limiar_exato_encontra():
     empresas = [_empresa(CNPJ_A, "Alpha")]
-    sim = lambda a, b: 85.0
+
+    def sim(a, b):
+        return 85.0
+
     resultado = casar_contrato(
         _contrato(nome="Alpha"), empresas, threshold=85, similaridade=sim
     )
@@ -138,7 +145,10 @@ def test_sem_cnpj_e_sem_nome_nao_encontrado():
 
 def test_empate_de_score_resolve_pela_ordem_do_portfolio():
     empresas = [_empresa(CNPJ_A, "Empresa X"), _empresa(CNPJ_B, "Empresa X")]
-    sim = lambda a, b: 95.0
+
+    def sim(a, b):
+        return 95.0
+
     resultado = casar_contrato(
         _contrato(nome="Empresa X"), empresas, threshold=85, similaridade=sim
     )

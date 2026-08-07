@@ -1,6 +1,6 @@
 # Plano de Ação — 3 Features Novas (Persistência de Contratos, Relatório PDF, Tooltip "Revisar")
 
-> **Data:** 2026-08-07 · **Status:** Decisões confirmadas pelo usuário (§2) — pronto para iniciar Fase 1
+> **Data:** 2026-08-07 · **Status:** Plano concluído — Fases 1-5 implementadas e commitadas (`47ed70b`, `d279b10`, `8a4f6d2`, `8936a3c`). Falta só o teste manual do usuário no `.exe` reconstruído.
 > **Pedido do usuário:** (1) contratos analisados devem ficar gravados (dados persistentes), com opção de exclusão; (2) botão para gerar relatório em PDF; (3) tooltip ao passar o mouse sobre "Revisar" explicando o que significa.
 
 ## 0. Levantamento factual (feito antes de planejar, só leitura)

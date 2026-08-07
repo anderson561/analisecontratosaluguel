@@ -21,10 +21,11 @@ from contract_parser.presentation.controllers import AppController
 
 def build_controller() -> AppController:
     """Compõe o controller raiz com o repositório e serviços de produção."""
+    from contract_parser.infrastructure.contrato_repository import ContratoRepository
     from contract_parser.infrastructure.empresa_repository import EmpresaRepository
 
     repository = EmpresaRepository()
-    return AppController(repository)
+    return AppController(repository, contrato_repo=ContratoRepository())
 
 
 def main(argv: Sequence[str] | None = None) -> int:

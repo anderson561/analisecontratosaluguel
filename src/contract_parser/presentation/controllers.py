@@ -38,9 +38,13 @@ from contract_parser.application.empresa_importer import (
 from contract_parser.application.empresa_service import EmpresaService
 from contract_parser.application.relatorio_service import RelatorioService
 from contract_parser.domain.contrato import Contrato
+from contract_parser.domain.documento_texto import DocumentoTexto
 from contract_parser.domain.empresa import Empresa
 from contract_parser.domain.relatorio import LinhaContrato, Relatorio, ResumoConformidade
-from contract_parser.domain.repositories import EmpresaRepositoryProtocol
+from contract_parser.domain.repositories import (
+    ContratoRepositoryProtocol,
+    EmpresaRepositoryProtocol,
+)
 from contract_parser.domain.validation_messages import formatar_erro_validacao
 from contract_parser.infrastructure.database import HealthResult, RepositoryError, check_health
 from contract_parser.infrastructure.empresa_repository import EmpresaJaExisteError
@@ -294,18 +298,38 @@ class RelatorioController:
         service: RelatorioService,
         excel_exporter: ExcelRelatorioExporter,
         pdf_exporter: PdfRelatorioExporter,
+        *,
+        contrato_repo: ContratoRepositoryProtocol | None = None,
     ) -> None:
         self._service = service
         self._excel = excel_exporter
         self._pdf = pdf_exporter
+        self._contrato_repo = contrato_repo
         self._contratos: list[Contrato] = []
         self._relatorio: Relatorio | None = None
         # Pares (linha do relatório, contrato de origem) para filtragem/destaque.
         self._pares: list[tuple[LinhaContrato, Contrato]] = []
+        # (arquivo_nome, motivo) dos itens cuja persistência falhou na última
+        # chamada a definir_contratos (degradação graciosa — não aborta o lote).
+        self._erros_persistencia: list[tuple[str, str]] = []
 
-    def definir_contratos(self, contratos: list[Contrato]) -> None:
-        """Recalcula os relatórios a partir dos contratos processados."""
+    def definir_contratos(
+        self,
+        contratos: list[Contrato],
+        *,
+        documentos: list[DocumentoTexto] | None = None,
+    ) -> None:
+        """Recalcula os relatórios a partir dos contratos processados.
+
+        ``documentos``, quando presente (fluxo normal de processamento de
+        pasta), habilita a persistência de cada contrato via
+        ``contrato_repo`` (se injetado) — pareado 1:1 com ``contratos`` pela
+        MESMA ordem em que ambos vêm de ``ProcessamentoController`` (§Fase 2 do
+        plano). Chamadas sem ``documentos`` (ex.: :meth:`carregar_historico`)
+        nunca persistem, evitando repersistir dados que já vieram do banco.
+        """
         self._contratos = list(contratos)
+        self._erros_persistencia = []
         try:
             self._relatorio = self._service.montar(self._contratos)
         except RepositoryError as exc:
@@ -321,13 +345,60 @@ class RelatorioController:
         pares = zip(self._relatorio.contratos.linhas, self._contratos, strict=True)
         self._pares = [(linha, c) for linha, c in pares if not _linha_vazia(linha)]
 
+        if documentos is not None and self._contrato_repo is not None:
+            self._persistir(documentos)
+
+    def _persistir(self, documentos: list[DocumentoTexto]) -> None:
+        assert self._relatorio is not None  # garantido pelo caller (definir_contratos)
+        itens = zip(documentos, self._contratos, self._relatorio.contratos.linhas, strict=True)
+        for doc, contrato, linha in itens:
+            arquivo_nome = Path(doc.caminho).name
+            try:
+                self._contrato_repo.salvar(  # type: ignore[union-attr]
+                    arquivo_nome=arquivo_nome,
+                    arquivo_hash=doc.hash,
+                    contrato=contrato,
+                    linha=linha,
+                    revisao=self._precisa_revisao(linha, contrato),
+                )
+            except RepositoryError as exc:
+                self._erros_persistencia.append((arquivo_nome, str(exc)))
+
+    def erros_persistencia(self) -> list[tuple[str, str]]:
+        """Itens cuja gravação no histórico falhou na última chamada.
+
+        Lista ``(arquivo_nome, motivo)`` — feedback de erro por item, mesmo
+        espírito de ``ProcessamentoResultado.erros`` (§6): falha de banco não
+        aborta o restante do lote nem invalida o Painel em memória.
+        """
+        return list(self._erros_persistencia)
+
+    def carregar_historico(self) -> None:
+        """Popula o Painel com o histórico persistido (no-op sem repositório).
+
+        Não repassa ``documentos`` a :meth:`definir_contratos` — os contratos
+        vêm do banco, não de um processamento de pasta, então não devem ser
+        regravados. Falha ao listar (banco indisponível) é degradação
+        graciosa: o app simplesmente abre sem histórico, sem lançar.
+        """
+        if self._contrato_repo is None:
+            return
+        try:
+            registros = self._contrato_repo.listar()
+        except RepositoryError:
+            return
+        self.definir_contratos([r.contrato for r in registros])
+
     def tem_dados(self) -> bool:
         return self._relatorio is not None
 
     # -- Painel (Relatório 01) --------------------------------------------- #
     @staticmethod
+    def _precisa_revisao(linha: LinhaContrato, contrato: Contrato) -> bool:
+        return linha.dados_incompletos or contrato.necessita_revisao
+
+    @staticmethod
     def _linha_painel(linha: LinhaContrato, contrato: Contrato) -> LinhaPainel:
-        revisao = linha.dados_incompletos or contrato.necessita_revisao
         return LinhaPainel(
             locatario=linha.locatario_nome or "",
             locador=linha.locador_nome or "",
@@ -338,7 +409,7 @@ class RelatorioController:
             proximo_reajuste=linha.proximo_reajuste or "",
             automatico=_sim_nao(linha.reajuste_automatico),
             vencimento=formatar_data_br(linha.vencimento),
-            revisao=revisao,
+            revisao=RelatorioController._precisa_revisao(linha, contrato),
         )
 
     def linhas_painel(self) -> list[LinhaPainel]:
@@ -442,6 +513,7 @@ class AppController:
         relatorio_service: RelatorioService | None = None,
         excel_exporter: ExcelRelatorioExporter | None = None,
         pdf_exporter: PdfRelatorioExporter | None = None,
+        contrato_repo: ContratoRepositoryProtocol | None = None,
         health_fn=check_health,
     ) -> None:
         from contract_parser.application.document_ingestor import DirectoryIngestor
@@ -458,12 +530,18 @@ class AppController:
             relatorio_service if relatorio_service is not None else RelatorioService(repository),
             excel_exporter if excel_exporter is not None else ExcelRelatorioExporter(),
             pdf_exporter if pdf_exporter is not None else PdfRelatorioExporter(),
+            contrato_repo=contrato_repo,
         )
+        if contrato_repo is not None:
+            # Painel já nasce com o histórico persistido (Fase 2 do plano).
+            self.relatorio.carregar_historico()
 
     def processar_pasta(self, pasta: str | Path) -> ProcessamentoResultado:
         """Processa a pasta E realimenta o Painel/Conformidade com os contratos."""
         resultado = self.processamento.processar_pasta(pasta)
-        self.relatorio.definir_contratos(resultado.contratos)
+        self.relatorio.definir_contratos(
+            resultado.contratos, documentos=resultado.ingestao.documentos
+        )
         return resultado
 
     def status_conexao(self) -> StatusConexao:

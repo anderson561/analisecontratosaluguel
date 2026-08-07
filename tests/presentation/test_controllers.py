@@ -21,7 +21,14 @@ from contract_parser.application.document_ingestor import (
     IngestaoResumo,
 )
 from contract_parser.application.relatorio_service import RelatorioService
-from contract_parser.domain.contrato import Contrato, Parte, Reajuste, TipoParte
+from contract_parser.domain.contrato import (
+    Contrato,
+    OrigemExtracao,
+    Parte,
+    Reajuste,
+    RegistroCampo,
+    TipoParte,
+)
 from contract_parser.domain.documento_texto import DocumentoTexto
 from contract_parser.domain.empresa import Empresa
 from contract_parser.infrastructure.database import HealthResult, RepositoryError
@@ -38,7 +45,7 @@ from contract_parser.presentation.controllers import (
     StatusConexao,
 )
 from tests.support.contract_fixtures import RESIDENCIAL_PF_PJ, carregar_contrato
-from tests.support.fakes import FakeEmpresaRepository
+from tests.support.fakes import FakeContratoRepository, FakeEmpresaRepository
 from tests.support.fixture_builders import cnpj_valido_sequencial
 
 CNPJ_A = cnpj_valido_sequencial(1)
@@ -131,14 +138,40 @@ def _contrato_vazio() -> Contrato:
     return Contrato()
 
 
-def _relatorio_controller(contratos) -> RelatorioController:
+def _contrato_baixa_confianca() -> Contrato:
+    """Todos os dados essenciais presentes, mas um campo marcado p/ revisão.
+
+    Reproduz o segundo motivo de "revisar" (independente de
+    ``dados_incompletos``): ``Contrato.necessita_revisao`` fica ``True`` por
+    proveniência de baixa confiança em ``memoria_extracao``, não por falta de
+    valor de aluguel/IRRF.
+    """
+    return Contrato(
+        locador=Parte(tipo=TipoParte.PF, nome="Ciclano", documento="22222222222"),
+        locatario=Parte(tipo=TipoParte.PJ, nome="Epsilon ME", documento=CNPJ_X),
+        valor_aluguel=Decimal("3000.00"),
+        reajuste=Reajuste(indice="IPCA", proximo_reajuste="01/2027", automatico=True),
+        memoria_extracao={
+            "valor_aluguel": RegistroCampo(
+                origem=OrigemExtracao.LLM, confianca=0.4, necessita_revisao=True
+            )
+        },
+    )
+
+
+def _relatorio_controller(contratos, *, contrato_repo=None) -> RelatorioController:
     ctrl = RelatorioController(
         RelatorioService(_repo_portfolio()),
         ExcelRelatorioExporter(),
         PdfRelatorioExporter(),
+        contrato_repo=contrato_repo,
     )
     ctrl.definir_contratos(contratos)
     return ctrl
+
+
+def _documento(caminho: str, hash_: str) -> DocumentoTexto:
+    return DocumentoTexto(caminho=caminho, hash=hash_, texto="irrelevante", metodo="nativo")
 
 
 # --------------------------------------------------------------------------- #
@@ -401,6 +434,172 @@ def test_exportar_sem_dados_vira_controller_error(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# Persistência de contratos (Fase 2 do plano de persistência)
+# --------------------------------------------------------------------------- #
+def test_definir_contratos_persiste_um_registro_por_contrato_com_documentos():
+    repo = FakeContratoRepository()
+    ctrl = RelatorioController(
+        RelatorioService(_repo_portfolio()),
+        ExcelRelatorioExporter(),
+        PdfRelatorioExporter(),
+        contrato_repo=repo,
+    )
+    documentos = [_documento("pasta/c1.pdf", "hash1"), _documento("pasta/c2.pdf", "hash2")]
+    contratos = [_contrato_pf_pj(), _contrato_incompleto()]
+
+    ctrl.definir_contratos(contratos, documentos=documentos)
+
+    assert repo.chamadas_salvar == ["c1.pdf", "c2.pdf"]
+    registros = {r.arquivo_nome: r for r in repo.listar()}
+    assert registros["c1.pdf"].arquivo_hash == "hash1"
+    assert registros["c1.pdf"].revisao is False
+    assert registros["c2.pdf"].arquivo_hash == "hash2"
+    # dados_incompletos (sem valor de aluguel) -> revisao True.
+    assert registros["c2.pdf"].revisao is True
+
+
+def test_definir_contratos_persiste_revisao_por_baixa_confianca():
+    repo = FakeContratoRepository()
+    ctrl = RelatorioController(
+        RelatorioService(_repo_portfolio()),
+        ExcelRelatorioExporter(),
+        PdfRelatorioExporter(),
+        contrato_repo=repo,
+    )
+    documentos = [_documento("pasta/c3.pdf", "hash3")]
+
+    ctrl.definir_contratos([_contrato_baixa_confianca()], documentos=documentos)
+
+    registro = repo.listar()[0]
+    assert registro.arquivo_nome == "c3.pdf"
+    # necessita_revisao (baixa confiança), não dados_incompletos.
+    assert registro.revisao is True
+
+
+def test_definir_contratos_sem_documentos_nao_persiste():
+    repo = FakeContratoRepository()
+    ctrl = RelatorioController(
+        RelatorioService(_repo_portfolio()),
+        ExcelRelatorioExporter(),
+        PdfRelatorioExporter(),
+        contrato_repo=repo,
+    )
+    ctrl.definir_contratos([_contrato_pf_pj()])
+    assert repo.chamadas_salvar == []
+    assert ctrl.linhas_painel()[0].locatario == "Alpha Comercio LTDA"
+
+
+def test_definir_contratos_sem_contrato_repo_nao_persiste_nem_lanca():
+    documentos = [_documento("pasta/c1.pdf", "hash1")]
+    ctrl = RelatorioController(
+        RelatorioService(_repo_portfolio()), ExcelRelatorioExporter(), PdfRelatorioExporter()
+    )
+    ctrl.definir_contratos([_contrato_pf_pj()], documentos=documentos)
+    assert ctrl.linhas_painel()[0].locatario == "Alpha Comercio LTDA"
+    assert ctrl.erros_persistencia() == []
+
+
+def test_definir_contratos_falha_de_persistencia_de_um_item_nao_derruba_o_painel():
+    repo = FakeContratoRepository()
+    repo.arquivos_com_erro.add("c1.pdf")
+    ctrl = RelatorioController(
+        RelatorioService(_repo_portfolio()),
+        ExcelRelatorioExporter(),
+        PdfRelatorioExporter(),
+        contrato_repo=repo,
+    )
+    documentos = [_documento("pasta/c1.pdf", "hash1"), _documento("pasta/c2.pdf", "hash2")]
+    contratos = [_contrato_pf_pj(), _contrato_locador_pj()]
+
+    ctrl.definir_contratos(contratos, documentos=documentos)
+
+    # O Painel continua populado com os DOIS contratos (falha de persistência
+    # de um item não aborta o processamento em memória).
+    assert len(ctrl.linhas_painel()) == 2
+    assert repo.chamadas_salvar == ["c2.pdf"]
+    assert ctrl.erros_persistencia() == [
+        ("c1.pdf", "falha simulada ao salvar c1.pdf")
+    ]
+
+
+def test_definir_contratos_reseta_erros_persistencia_a_cada_chamada():
+    repo = FakeContratoRepository()
+    repo.arquivos_com_erro.add("c1.pdf")
+    ctrl = RelatorioController(
+        RelatorioService(_repo_portfolio()),
+        ExcelRelatorioExporter(),
+        PdfRelatorioExporter(),
+        contrato_repo=repo,
+    )
+    ctrl.definir_contratos(
+        [_contrato_pf_pj()], documentos=[_documento("pasta/c1.pdf", "hash1")]
+    )
+    assert len(ctrl.erros_persistencia()) == 1
+
+    repo.arquivos_com_erro.clear()
+    ctrl.definir_contratos(
+        [_contrato_pf_pj()], documentos=[_documento("pasta/c1.pdf", "hash1")]
+    )
+    assert ctrl.erros_persistencia() == []
+
+
+def test_carregar_historico_popula_painel_sem_repersistir():
+    repo = FakeContratoRepository()
+    repo.salvar(
+        arquivo_nome="antigo1.pdf",
+        arquivo_hash="hash-antigo-1",
+        contrato=_contrato_pf_pj(),
+        linha=RelatorioService(_repo_portfolio()).montar([_contrato_pf_pj()]).contratos.linhas[0],
+        revisao=False,
+    )
+    repo.salvar(
+        arquivo_nome="antigo2.pdf",
+        arquivo_hash="hash-antigo-2",
+        contrato=_contrato_locador_pj(),
+        linha=RelatorioService(_repo_portfolio())
+        .montar([_contrato_locador_pj()])
+        .contratos.linhas[0],
+        revisao=False,
+    )
+    repo.chamadas_salvar.clear()  # só interessam chamadas feitas DEPOIS de carregar
+
+    ctrl = RelatorioController(
+        RelatorioService(_repo_portfolio()),
+        ExcelRelatorioExporter(),
+        PdfRelatorioExporter(),
+        contrato_repo=repo,
+    )
+    ctrl.carregar_historico()
+
+    assert len(ctrl.linhas_painel()) == 2
+    assert ctrl.resumo_conformidade().total_contratos_localizados == 2
+    assert repo.chamadas_salvar == []
+
+
+def test_carregar_historico_sem_contrato_repo_e_no_op():
+    ctrl = RelatorioController(
+        RelatorioService(_repo_portfolio()), ExcelRelatorioExporter(), PdfRelatorioExporter()
+    )
+    ctrl.carregar_historico()  # não lança
+    assert ctrl.tem_dados() is False
+
+
+def test_carregar_historico_degrada_quando_listar_falha():
+    class RepoContratoQueFalhaAoListar(FakeContratoRepository):
+        def listar(self):
+            raise RepositoryError("banco indisponivel")
+
+    ctrl = RelatorioController(
+        RelatorioService(_repo_portfolio()),
+        ExcelRelatorioExporter(),
+        PdfRelatorioExporter(),
+        contrato_repo=RepoContratoQueFalhaAoListar(),
+    )
+    ctrl.carregar_historico()  # não lança
+    assert ctrl.tem_dados() is False
+
+
+# --------------------------------------------------------------------------- #
 # AppController: orquestração + status de conexão (degradação graciosa)
 # --------------------------------------------------------------------------- #
 def test_app_processar_pasta_realimenta_painel_e_conformidade():
@@ -449,3 +648,50 @@ def test_empresas_degrada_quando_repo_falha():
     ctrl = EmpresasController(RepoQueFalha())
     with pytest.raises(ControllerError):
         ctrl.linhas_empresas()
+
+
+# --------------------------------------------------------------------------- #
+# AppController: persistência de contratos (Fase 2)
+# --------------------------------------------------------------------------- #
+def test_app_controller_nasce_com_painel_populado_pelo_historico():
+    repo_contratos = FakeContratoRepository()
+    repo_contratos.salvar(
+        arquivo_nome="historico.pdf",
+        arquivo_hash="hash-historico",
+        contrato=_contrato_pf_pj(),
+        linha=RelatorioService(_repo_portfolio()).montar([_contrato_pf_pj()]).contratos.linhas[0],
+        revisao=False,
+    )
+
+    app = AppController(_repo_portfolio(), contrato_repo=repo_contratos)
+
+    assert app.relatorio.tem_dados() is True
+    assert len(app.relatorio.linhas_painel()) == 1
+    assert app.relatorio.linhas_painel()[0].locatario == "Alpha Comercio LTDA"
+
+
+def test_app_controller_sem_contrato_repo_nao_carrega_historico_automaticamente():
+    app = AppController(_repo_portfolio())
+    assert app.relatorio.tem_dados() is False
+
+
+def test_app_processar_pasta_persiste_com_nome_e_hash_dos_documentos():
+    texto = carregar_contrato(RESIDENCIAL_PF_PJ)
+    resumo = IngestaoResumo(
+        total_arquivos=2,
+        processados=2,
+        documentos=[
+            DocumentoTexto(caminho="/pasta/c1.pdf", hash="hash-c1", texto=texto, metodo="nativo"),
+            DocumentoTexto(caminho="/pasta/c2.pdf", hash="hash-c2", texto=texto, metodo="nativo"),
+        ],
+    )
+    repo_contratos = FakeContratoRepository()
+    app = AppController(
+        _repo_portfolio(), ingestor=FakeIngestor(resumo), contrato_repo=repo_contratos
+    )
+
+    app.processar_pasta("qualquer")
+
+    assert repo_contratos.chamadas_salvar == ["c1.pdf", "c2.pdf"]
+    registros = {r.arquivo_nome: r.arquivo_hash for r in repo_contratos.listar()}
+    assert registros == {"c1.pdf": "hash-c1", "c2.pdf": "hash-c2"}

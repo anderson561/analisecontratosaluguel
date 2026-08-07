@@ -32,9 +32,11 @@
 - **Agente sugerido:** `xp-coach` (TDD estrito, mesmo padrão dos fixes anteriores).
 
 ### Fase 2 — Wiring no controller (persistir ao processar, carregar ao abrir)
-- `RelatorioController`/`AppController` passam a receber um `ContratoRepositoryProtocol` (injeção, mesmo padrão de `EmpresaRepository`).
-- Ao final de `processar_pasta`, cada contrato processado é persistido (respeitando a decisão §2.2 — update vs. novo registro).
-- Ao abrir o app (`app.py`, `build_controller()`), o Painel de Contratos é pré-carregado com os registros já persistidos (não só os processados na sessão atual) — mudança de comportamento visível, vale confirmar que faz sentido para o fluxo real de uso (abrir o app e já ver o histórico).
+- **Como resolver a perda de identidade do arquivo (o risco note em §0):** não precisa mudar `Contrato`/`ProcessamentoResultado`. `ProcessamentoController.processar_pasta` já constrói `contratos` iterando `ingestao.documentos` **na mesma ordem**, 1:1 — então `zip(resultado.ingestao.documentos, resultado.contratos, strict=True)` já dá o pareamento certo (arquivo → contrato) no ponto onde `AppController.processar_pasta` tem os dois. `DocumentoTexto.hash` (sha256 do conteúdo, já calculado na ingestão) vira `arquivo_hash`; `Path(doc.caminho).name` vira `arquivo_nome`.
+- `RelatorioController.definir_contratos` ganha um parâmetro opcional `documentos: list[DocumentoTexto] | None` — quando presente (fluxo normal de processamento) e o controller tiver um `ContratoRepositoryProtocol` injetado, persiste cada linha via `salvar(...)` (upsert por hash, decisão §2.2). Falha de persistência de um item **não aborta** o restante nem quebra o Painel em memória (mesmo espírito de "erro por arquivo" do `IngestaoResumo`) — fica coletada numa lista exposta por um novo getter, não estoura `ControllerError`.
+- `RelatorioController` ganha `carregar_historico()`: chama `contrato_repo.listar()` e alimenta `definir_contratos([r.contrato for r in registros])` (sem `documentos` → não repersiste o que já está salvo). `AppController`/`app.build_controller()` chama isso uma vez ao montar o controller, se um `contrato_repo` foi injetado — é isso que faz o Painel já nascer com o histórico.
+- **Consequência aceita (vale saber):** carregar o histórico **recalcula** IRRF/match de portfólio com as regras/tabela ATUAIS (reusa o mesmo `RelatorioService.montar`), não reexibe os valores exatamente como foram calculados na época. Para uma ferramenta fiscal isso tende a ser desejável (ex.: contratos antigos passam a refletir a correção do ADR-004 automaticamente), mas é uma escolha explícita, não um detalhe escondido.
+- **Fora desta fase (fica para a Fase 3):** o `id` do registro persistido ainda não é exposto em `LinhaPainel`/`_pares` — é isso que a Fase 3 (botão Excluir por linha) vai precisar adicionar.
 - **Agente sugerido:** `xp-coach`.
 
 ### Fase 3 — UI de exclusão

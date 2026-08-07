@@ -11,9 +11,12 @@ mais de um fake de baixo nível equivalente ao antigo ``pymongo.Collection``.
 """
 from __future__ import annotations
 
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 
 from contract_parser.domain.cnpj import normalizar_cnpj
+from contract_parser.domain.contrato import Contrato
 from contract_parser.domain.documento_texto import DocumentoTexto
 from contract_parser.domain.empresa import Empresa
 from contract_parser.domain.extracao import ResultadoOcr
@@ -22,6 +25,9 @@ from contract_parser.domain.interpretador import (
     ResultadoInterpretacao,
 )
 from contract_parser.domain.irrf import TabelaIRRF, tabela_irrf_2026
+from contract_parser.domain.registro_contrato import RegistroContrato
+from contract_parser.domain.relatorio import LinhaContrato
+from contract_parser.infrastructure.database import RepositoryError
 
 
 class FakeEmpresaRepository:
@@ -166,3 +172,66 @@ class FakeAtualizadorTabelaRFB:
         if self._erro is not None:
             raise self._erro
         return self._tabela
+
+
+class FakeContratoRepository:
+    """Repositório in-memory que satisfaz ``ContratoRepositoryProtocol``.
+
+    Reproduz o upsert por ``arquivo_hash`` da implementação SQLite real (mesmo
+    ``id`` sobrevive a um reprocessamento). ``arquivos_com_erro`` permite
+    simular falha de persistência de um item específico (``RepositoryError``),
+    sem afetar os demais — usado para testar a degradação graciosa do
+    ``RelatorioController`` (Fase 2 do plano de persistência).
+    """
+
+    def __init__(self) -> None:
+        self._store: dict[str, RegistroContrato] = {}
+        self._id_por_hash: dict[str, str] = {}
+        self.chamadas_salvar: list[str] = []
+        self.arquivos_com_erro: set[str] = set()
+
+    def salvar(
+        self,
+        *,
+        arquivo_nome: str,
+        arquivo_hash: str,
+        contrato: Contrato,
+        linha: LinhaContrato,
+        revisao: bool,
+    ) -> RegistroContrato:
+        if arquivo_nome in self.arquivos_com_erro:
+            raise RepositoryError(f"falha simulada ao salvar {arquivo_nome}")
+        self.chamadas_salvar.append(arquivo_nome)
+        id_ = self._id_por_hash.get(arquivo_hash, str(uuid.uuid4()))
+        registro = RegistroContrato(
+            id=id_,
+            arquivo_nome=arquivo_nome,
+            arquivo_hash=arquivo_hash,
+            processado_em=datetime.now(UTC),
+            contrato=contrato,
+            linha=linha,
+            revisao=revisao,
+        )
+        self._store[id_] = registro
+        self._id_por_hash[arquivo_hash] = id_
+        return registro
+
+    def listar(self) -> list[RegistroContrato]:
+        return list(self._store.values())
+
+    def buscar_por_hash(self, arquivo_hash: str) -> RegistroContrato | None:
+        id_ = self._id_por_hash.get(arquivo_hash)
+        return self._store.get(id_) if id_ is not None else None
+
+    def excluir(self, id: str) -> bool:
+        registro = self._store.pop(id, None)
+        if registro is None:
+            return False
+        self._id_por_hash.pop(registro.arquivo_hash, None)
+        return True
+
+    def excluir_todos(self) -> int:
+        total = len(self._store)
+        self._store.clear()
+        self._id_por_hash.clear()
+        return total

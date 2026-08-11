@@ -1,4 +1,4 @@
-"""Importador em lote de empresas (.xlsx / .csv) — camada application.
+"""Importador em lote de empresas (.xlsx / .csv / .ods) — camada application.
 
 Ingestão robusta (skill python-automation-pro): desacopla leitura de arquivo
 (I/O isolado em ``_ler_linhas``) da regra de negócio (auto-mapeamento + dedup).
@@ -22,6 +22,9 @@ import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from odf import teletype
+from odf.opendocument import load as load_ods
+from odf.table import Table, TableCell, TableRow
 from openpyxl import load_workbook
 from pydantic import ValidationError
 
@@ -111,14 +114,87 @@ def _ler_linhas_csv(caminho: Path) -> list[list[object]]:
     return [list(row) for row in csv.reader(texto.splitlines(), dialect)]
 
 
+def _valor_celula_ods(cell: TableCell) -> object:
+    """Extrai o valor de uma célula ODS: número (``office:value``) ou texto."""
+    if cell.getAttribute("valuetype") == "float":
+        valor_bruto = cell.getAttribute("value")
+        if valor_bruto is not None:
+            numero = float(valor_bruto)
+            # Espelha o comportamento do openpyxl: inteiro "limpo" vira int
+            # (evita, por ex., perder o CNPJ pelo ponto decimal de "x.0").
+            return int(numero) if numero.is_integer() else numero
+    texto = teletype.extractText(cell)
+    return texto if texto else None
+
+
+def _ler_celulas_linha_ods(row: TableRow) -> list[object]:
+    """Expande ``table:number-columns-repeated`` para não desalinhar colunas.
+
+    Exceção: quando a repetição é a ÚLTIMA célula da linha E está vazia, ela
+    representa apenas "o resto da linha está vazio até o limite do formato"
+    (o LibreOffice Calc grava isso rotineiramente com valores na casa de
+    centenas de milhares) — nesse caso a expansão é capada em 1 cópia, para
+    não materializar células vazias sem sentido de negócio. Qualquer outra
+    repetição (no meio da linha, ou com conteúdo não vazio) é expandida
+    literalmente, pois o alinhamento de coluna depende disso.
+    """
+    celulas = row.getElementsByType(TableCell)
+    valores: list[object] = []
+    for i, cell in enumerate(celulas):
+        valor = _valor_celula_ods(cell)
+        repeticoes = int(cell.getAttribute("numbercolumnsrepeated") or 1)
+        eh_ultima = i == len(celulas) - 1
+        if valor is None and eh_ultima:
+            repeticoes = 1
+        valores.extend([valor] * repeticoes)
+    return valores
+
+
+def _ler_linhas_ods(caminho: Path) -> list[list[object]]:
+    """Lê a primeira planilha do .ods (odfpy), expandindo linhas/células repetidas.
+
+    O ODS comprime linhas e células vazias repetidas via os atributos
+    ``table:number-rows-repeated``/``table:number-columns-repeated``; se não
+    forem expandidos aqui, o auto-mapeamento de colunas desalinha silenciosamente.
+
+    Exceção simétrica à de ``_ler_celulas_linha_ods``: a ÚLTIMA ``TableRow`` da
+    tabela, se totalmente vazia, representa a cauda vazia da grade até o
+    limite do formato (o LibreOffice Calc real grava isso com repetições na
+    casa de milhões) — é capada em 1 cópia para não materializar a grade
+    inteira. Repetições no meio da tabela continuam expandidas literalmente.
+    """
+    try:
+        documento = load_ods(caminho)
+    except Exception as exc:
+        raise ArquivoImportacaoError(f"Falha ao abrir .ods {caminho}: {exc!r}") from exc
+
+    tabelas = documento.spreadsheet.getElementsByType(Table)
+    if not tabelas:
+        return []
+
+    linhas_tabela = tabelas[0].getElementsByType(TableRow)
+    linhas: list[list[object]] = []
+    for i, row in enumerate(linhas_tabela):
+        valores = _ler_celulas_linha_ods(row)
+        repeticoes = int(row.getAttribute("numberrowsrepeated") or 1)
+        eh_ultima = i == len(linhas_tabela) - 1
+        linha_vazia = not any(_celula_str(v) for v in valores)
+        if linha_vazia and eh_ultima:
+            repeticoes = 1
+        linhas.extend([list(valores) for _ in range(repeticoes)])
+    return linhas
+
+
 def _ler_linhas(caminho: Path) -> list[list[object]]:
     sufixo = caminho.suffix.lower()
     if sufixo == ".xlsx":
         return _ler_linhas_xlsx(caminho)
     if sufixo == ".csv":
         return _ler_linhas_csv(caminho)
+    if sufixo == ".ods":
+        return _ler_linhas_ods(caminho)
     raise ArquivoImportacaoError(
-        f"Extensão não suportada: {sufixo!r} (use .xlsx ou .csv)."
+        f"Extensão não suportada: {sufixo!r} (use .xlsx, .csv ou .ods)."
     )
 
 

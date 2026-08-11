@@ -1,6 +1,7 @@
 """Testes do importador em lote: auto-mapeamento, dedup, erros e CA-01."""
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,11 @@ from contract_parser.application.empresa_importer import (
 )
 from tests.support.fakes import FakeEmpresaRepository
 from tests.support.fixture_builders import (
+    cnpj_valido_sequencial,
+    construir_ods_50_empresas,
+    construir_ods_com_cauda_vazia_gigante,
+    construir_ods_com_linhas_e_celulas_repetidas,
+    construir_ods_header_sujo,
     construir_xlsx_50_empresas,
     construir_xlsx_header_sujo,
     construir_xlsx_sem_header_cnpj,
@@ -141,6 +147,78 @@ def test_upsert_idempotente_reimportacao(importer, tmp_path):
     importer.importar(caminho)
     importer.importar(caminho)  # reimportar não duplica
     assert len(importer._repo.list_all()) == 50
+
+
+# --------------------------------------------------------------------------- #
+# Importação .ods (fixtures programáticas via odfpy)
+# --------------------------------------------------------------------------- #
+def test_ca01_importar_ods_50_empresas(importer, tmp_path):
+    caminho = construir_ods_50_empresas(tmp_path / "portfolio50.ods")
+
+    resumo = importer.importar(caminho)
+
+    assert resumo.total_linhas == 50
+    assert resumo.importados == 50
+    assert resumo.duplicados == 0
+    assert resumo.total_erros == 0
+    assert len(importer._repo.list_all()) == 50
+
+
+def test_importar_ods_header_sujo_e_ordem_invertida(importer, tmp_path):
+    caminho = construir_ods_header_sujo(tmp_path / "sujo.ods")
+    resumo = importer.importar(caminho)
+    assert resumo.importados == 2
+    cnpjs = {e.cnpj for e in importer._repo.list_all()}
+    assert cnpjs == {"11222333000181", "45566778000109"}
+
+
+def test_importar_ods_linhas_e_celulas_repetidas_nao_desalinha(importer, tmp_path):
+    caminho = construir_ods_com_linhas_e_celulas_repetidas(tmp_path / "lacunas.ods")
+
+    resumo = importer.importar(caminho)
+
+    # 3 empresas válidas; as linhas totalmente vazias (repetidas) são ignoradas.
+    assert resumo.importados == 3
+    assert resumo.total_erros == 0
+    por_cnpj = {e.cnpj: e.razao_social for e in importer._repo.list_all()}
+    # A 2ª empresa tem 2 células vazias compactadas (number-columns-repeated)
+    # antes da Razão Social: se a expansão falhar, isso viria vazio/errado.
+    assert por_cnpj[cnpj_valido_sequencial(101)] == "Empresa Um LTDA"
+    assert por_cnpj[cnpj_valido_sequencial(102)] == "Empresa Dois LTDA"
+    assert por_cnpj[cnpj_valido_sequencial(103)] == "Empresa Tres LTDA"
+
+
+def test_importar_ods_cauda_vazia_gigante_nao_materializa_grade_inteira(importer, tmp_path):
+    """Reproduz o comportamento real do LibreOffice Calc: a última linha (e a
+    última célula de uma linha real) usam number-rows/columns-repeated na casa
+    de centenas de milhares/milhões para comprimir "o resto da grade está
+    vazio". Expandir isso literalmente materializaria ~1 milhão de linhas —
+    aqui garantimos que a importação (a) termina rápido, sem alocar a grade
+    inteira, e (b) o resumo reflete só as linhas reais, não a contagem bruta
+    do atributo."""
+    caminho = construir_ods_com_cauda_vazia_gigante(tmp_path / "cauda_gigante.ods")
+
+    inicio = time.perf_counter()
+    resumo = importer.importar(caminho)
+    duracao = time.perf_counter() - inicio
+
+    assert duracao < 5, f"importação demorou {duracao:.1f}s — cauda vazia foi materializada literalmente"
+    assert resumo.importados == 3
+    assert resumo.total_erros == 0
+    # Não pode refletir a contagem literal do atributo (~1_000_000): no máximo
+    # as 3 linhas reais + 1 linha vazia "cauda" (capada em 1 cópia).
+    assert resumo.total_linhas <= 4
+    por_cnpj = {e.cnpj: e.razao_social for e in importer._repo.list_all()}
+    assert por_cnpj[cnpj_valido_sequencial(201)] == "Empresa Um LTDA"
+    assert por_cnpj[cnpj_valido_sequencial(202)] == "Empresa Dois LTDA"
+    assert por_cnpj[cnpj_valido_sequencial(203)] == "Empresa Tres LTDA"
+
+
+def test_importar_ods_corrompido_levanta(importer, tmp_path):
+    caminho = tmp_path / "corrompido.ods"
+    caminho.write_bytes(b"isto nao e um ods valido")
+    with pytest.raises(ArquivoImportacaoError):
+        importer.importar(caminho)
 
 
 # --------------------------------------------------------------------------- #

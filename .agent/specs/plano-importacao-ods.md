@@ -1,6 +1,6 @@
 # Plano de Ação — Importação de Portfólio via .ods (LibreOffice Calc)
 
-> **Data:** 2026-08-10 · **Status:** Pronto para Fase 1
+> **Data:** 2026-08-10 · **Status:** Plano concluído — Fases 1-3 implementadas e commitadas (`6767ef0`, `604bb6b`). Falta só o teste manual do usuário com um `.ods` real (LibreOffice Calc) no `.exe` reconstruído.
 > **Pedido do usuário:** na aba Empresas (cadastro de portfólio), permitir importar também arquivos `.ods` (OpenDocument Spreadsheet, formato nativo do LibreOffice Calc), além de `.xlsx`/`.csv` já suportados.
 
 ## 1. Estado atual (levantado antes de planejar)

@@ -125,7 +125,7 @@ class MainWindow(ctk.CTk):
         topo.pack(fill="x", padx=8, pady=8)
 
         ctk.CTkButton(
-            topo, text="Importar .xlsx/.csv…", command=self._on_importar
+            topo, text="Importar .xlsx/.csv/.ods…", command=self._on_importar
         ).pack(side="left", padx=4)
         self._lbl_import = ctk.CTkLabel(topo, text="", anchor="w")
         self._lbl_import.pack(side="left", padx=12)
@@ -175,7 +175,7 @@ class MainWindow(ctk.CTk):
     def _on_importar(self) -> None:
         caminho = filedialog.askopenfilename(
             title="Selecione a planilha de empresas",
-            filetypes=[("Planilhas", "*.xlsx *.csv"), ("Todos", "*.*")],
+            filetypes=[("Planilhas", "*.xlsx *.csv *.ods"), ("Todos", "*.*")],
         )
         if not caminho:
             return

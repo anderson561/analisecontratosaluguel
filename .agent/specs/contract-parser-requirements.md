@@ -51,7 +51,7 @@ Além dos campos do PRD, o especialista de Direito Imobiliário exige capturar:
 - **Tabela IRRF desatualizada/sem conexão à RFB:** usar última versão persistida + avisar data de validade.
 
 ## 7. Critérios de Aceitação (rastreamento ao PRD)
-- [x] **CA-01** — Importar `.xlsx` com 50 empresas → 50 registros na tabela `empresas` (SQLite) + listagem na GUI. **Validado fim-a-fim com banco SQLite real** (migração ADR-002, M6).
+- [x] **CA-01** — Importar `.xlsx` com 50 empresas → 50 registros na tabela `empresas` (SQLite) + listagem na GUI. **Validado fim-a-fim com banco SQLite real** (migração ADR-002, M6). **Atualizado:** `.ods` (OpenDocument Spreadsheet, LibreOffice Calc) também é suportado — mesmo pipeline de leitura/auto-mapeamento de colunas (CNPJ/Razão Social) e mesma cobertura de teste de `.xlsx`/`.csv`, não é um formato de segunda classe.
 - [ ] ~~**CA-02** — Docker~~ → **DEFERIDO** (Docker fora do escopo; ambiente local nativo).
 - [ ] **CA-03** — Aluguel PF→PJ de R$ 5.000,00 → alíquota + dedução da tabela 2026 + memória de cálculo. **Atualizado (ADR-004):** o desconto simplificado de R$607,20 também se aplica ao aluguel (base tributável R$4.392,80), o que zera integralmente o imposto após o redutor da Lei nº 15.270/2025 — imposto final esperado passa a ser **R$ 0,00** (não mais R$ 153,38 do ADR-003, nem R$ 466,27 original).
 - [ ] **CA-04** — Empresas A,B,C cadastradas; só A,B na pasta → status individual + alerta de ausência de C.

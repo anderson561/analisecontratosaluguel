@@ -48,6 +48,7 @@ Além dos campos do PRD, o especialista de Direito Imobiliário exige capturar:
 - **Cláusula de reajuste inválida** (periodicidade < 12m ou índice vedado): extrair mesmo assim + **flag de alerta jurídico**.
 - **Duas garantias no mesmo contrato:** extrair ambas + flag de violação do Art. 37.
 - **Arquivo do banco SQLite inacessível:** falha explícita com orientação (verificar permissão/caminho de `DATABASE_PATH`; ver ADR-002 — não é mais um serviço externo).
+- **Persistência ao mover/copiar o `.exe`:** o caminho padrão do banco SQLite é ancorado na pasta onde o executável está fisicamente salvo (`sys.executable`, quando empacotado via PyInstaller), não no diretório de trabalho (CWD) do processo no momento em que ele inicia. Isso garante que copiar a pasta inteira do `.exe` (incluindo a subpasta `data/`) para outro computador, ou iniciar o app por um atalho com "Iniciar em" diferente, preserva os dados já cadastrados/processados. `DATABASE_PATH` explícita (variável de ambiente) continua tendo prioridade sobre o cálculo padrão.
 - **Tabela IRRF desatualizada/sem conexão à RFB:** usar última versão persistida + avisar data de validade.
 
 ## 7. Critérios de Aceitação (rastreamento ao PRD)

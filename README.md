@@ -53,6 +53,15 @@ gravável, a GUI ainda abre (degradação graciosa — banner de status avisa e 
 abas que dependem do banco falham com mensagem amigável, sem derrubar o
 processo).
 
+**Seus dados (empresas cadastradas, importadas e contratos processados) ficam
+em `data/contract_parser.db`, ao lado do executável/repositório.** No `.exe`
+empacotado, esse caminho é ancorado na pasta onde o `ContractParser.exe` está
+fisicamente salvo (não no diretório de onde ele foi iniciado) — para mover o
+programa para outro computador ou fazer um backup, **copie a pasta inteira**
+(o `.exe` + a subpasta `data/`), não só o executável. `DATABASE_PATH` no `.env`
+continua disponível para apontar para outro caminho explicitamente (ex.: uma
+pasta de rede compartilhada).
+
 ## Testes
 ```bash
 pytest                          # suíte completa (unit + integração + E2E headless)

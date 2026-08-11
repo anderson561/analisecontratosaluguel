@@ -38,10 +38,27 @@ def _caminho_banco_padrao() -> str:
     return str(base / "data" / "contract_parser.db")
 
 
+def _caminho_log_padrao() -> str:
+    """Caminho padrao do log de auditoria, ancorado do mesmo jeito que o banco.
+
+    Mesma logica de :func:`_caminho_banco_padrao` (ancora em ``sys.executable``
+    quando empacotado, ou na raiz do repo em dev) — o arquivo ``app.log`` vive
+    ao lado de ``contract_parser.db`` na mesma pasta ``data``.
+    """
+    if getattr(sys, "frozen", False):
+        base = Path(sys.executable).resolve().parent
+    else:
+        base = Path(__file__).resolve().parent.parent.parent
+    return str(base / "data" / "app.log")
+
+
 @dataclass(frozen=True)
 class Settings:
     database_path: str = field(
         default_factory=lambda: os.getenv("DATABASE_PATH") or _caminho_banco_padrao()
+    )
+    log_path: str = field(
+        default_factory=lambda: os.getenv("LOG_PATH") or _caminho_log_padrao()
     )
     tesseract_cmd: str = os.getenv("TESSERACT_CMD", "")
     ocr_lang: str = os.getenv("OCR_LANG", "por")

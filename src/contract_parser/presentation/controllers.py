@@ -46,6 +46,7 @@ from contract_parser.domain.repositories import (
     EmpresaRepositoryProtocol,
 )
 from contract_parser.domain.validation_messages import formatar_erro_validacao
+from contract_parser.infrastructure.audit_log import registrar_evento
 from contract_parser.infrastructure.database import HealthResult, RepositoryError, check_health
 from contract_parser.infrastructure.empresa_repository import EmpresaJaExisteError
 from contract_parser.infrastructure.report_exporters import (
@@ -409,18 +410,31 @@ class RelatorioController:
         vêm do banco, não de um processamento de pasta, então não devem ser
         regravados. Repassa ``registro_ids`` (o ``id`` de cada
         ``RegistroContrato``) para que o Painel saiba qual registro excluir por
-        linha (§Fase 3). Falha ao listar (banco indisponível) é degradação
-        graciosa: o app simplesmente abre sem histórico, sem lançar.
+        linha (§Fase 3). Falha ao listar (banco indisponível) OU qualquer
+        exceção inesperada ao montar o Painel a partir do histórico (ex.:
+        linha corrompida que quebra a desserialização em
+        ``ContratoRepository._from_row``) é degradação graciosa: o app
+        simplesmente abre sem histórico, sem lançar — cada ocorrência é
+        registrada no log de auditoria (§plano) para diagnóstico posterior.
         """
         if self._contrato_repo is None:
             return
         try:
             registros = self._contrato_repo.listar()
-        except RepositoryError:
+        except RepositoryError as exc:
+            registrar_evento(f"Falha ao listar histórico: {exc}")
             return
-        self.definir_contratos(
-            [r.contrato for r in registros], registro_ids=[r.id for r in registros]
-        )
+        except Exception as exc:  # noqa: BLE001 - degradacao graciosa: nunca propagar
+            registrar_evento(f"Falha inesperada ao carregar histórico: {exc!r}")
+            return
+        try:
+            self.definir_contratos(
+                [r.contrato for r in registros], registro_ids=[r.id for r in registros]
+            )
+        except Exception as exc:  # noqa: BLE001 - degradacao graciosa: nunca propagar
+            registrar_evento(f"Falha inesperada ao carregar histórico: {exc!r}")
+            return
+        registrar_evento(f"{len(registros)} contrato(s) carregado(s) do histórico")
 
     def tem_dados(self) -> bool:
         return self._relatorio is not None

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from unittest.mock import patch
 
 import pytest
 
@@ -639,6 +640,100 @@ def test_carregar_historico_degrada_quando_listar_falha():
     )
     ctrl.carregar_historico()  # não lança
     assert ctrl.tem_dados() is False
+
+
+# --------------------------------------------------------------------------- #
+# Log de auditoria do carregamento do histórico
+# (`.agent/specs/plano-log-auditoria-carregamento-historico.md`)
+# --------------------------------------------------------------------------- #
+def test_carregar_historico_sucesso_loga_contagem_correta():
+    repo = FakeContratoRepository()
+    repo.salvar(
+        arquivo_nome="antigo1.pdf",
+        arquivo_hash="hash-antigo-1",
+        contrato=_contrato_pf_pj(),
+        linha=RelatorioService(_repo_portfolio()).montar([_contrato_pf_pj()]).contratos.linhas[0],
+        revisao=False,
+    )
+    repo.salvar(
+        arquivo_nome="antigo2.pdf",
+        arquivo_hash="hash-antigo-2",
+        contrato=_contrato_locador_pj(),
+        linha=RelatorioService(_repo_portfolio())
+        .montar([_contrato_locador_pj()])
+        .contratos.linhas[0],
+        revisao=False,
+    )
+    ctrl = RelatorioController(
+        RelatorioService(_repo_portfolio()),
+        ExcelRelatorioExporter(),
+        PdfRelatorioExporter(),
+        contrato_repo=repo,
+    )
+
+    with patch("contract_parser.presentation.controllers.registrar_evento") as mock_log:
+        ctrl.carregar_historico()
+
+    mock_log.assert_called_once_with("2 contrato(s) carregado(s) do histórico")
+
+
+def test_carregar_historico_com_repository_error_loga_o_erro():
+    class RepoContratoQueFalhaAoListar(FakeContratoRepository):
+        def listar(self):
+            raise RepositoryError("banco indisponivel")
+
+    ctrl = RelatorioController(
+        RelatorioService(_repo_portfolio()),
+        ExcelRelatorioExporter(),
+        PdfRelatorioExporter(),
+        contrato_repo=RepoContratoQueFalhaAoListar(),
+    )
+
+    with patch("contract_parser.presentation.controllers.registrar_evento") as mock_log:
+        ctrl.carregar_historico()  # não lança
+
+    assert ctrl.tem_dados() is False
+    mock_log.assert_called_once()
+    (mensagem,), _ = mock_log.call_args
+    assert "banco indisponivel" in mensagem
+    assert "Falha ao listar histórico" in mensagem
+
+
+def test_carregar_historico_com_exception_inesperada_na_desserializacao_degrada_e_loga():
+    """Regressão: hoje uma exceção NÃO-``RepositoryError`` vinda de
+    ``definir_contratos`` (ex.: ``pydantic.ValidationError`` ao reidratar uma
+    linha corrompida via ``_from_row``) propagava sem ser capturada,
+    quebrando a garantia de que o histórico nunca derruba a UI."""
+    repo = FakeContratoRepository()
+    repo.salvar(
+        arquivo_nome="corrompido.pdf",
+        arquivo_hash="hash-corrompido",
+        contrato=_contrato_pf_pj(),
+        linha=RelatorioService(_repo_portfolio()).montar([_contrato_pf_pj()]).contratos.linhas[0],
+        revisao=False,
+    )
+    ctrl = RelatorioController(
+        RelatorioService(_repo_portfolio()),
+        ExcelRelatorioExporter(),
+        PdfRelatorioExporter(),
+        contrato_repo=repo,
+    )
+
+    with (
+        patch("contract_parser.presentation.controllers.registrar_evento") as mock_log,
+        patch.object(
+            RelatorioController,
+            "definir_contratos",
+            side_effect=ValueError("linha corrompida: campo invalido"),
+        ),
+    ):
+        ctrl.carregar_historico()  # não lança
+
+    assert ctrl.tem_dados() is False
+    mock_log.assert_called_once()
+    (mensagem,), _ = mock_log.call_args
+    assert "Falha inesperada ao carregar histórico" in mensagem
+    assert "linha corrompida" in mensagem
 
 
 # --------------------------------------------------------------------------- #

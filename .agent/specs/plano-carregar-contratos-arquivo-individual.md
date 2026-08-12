@@ -94,3 +94,24 @@ ingestão a partir de uma lista de arquivos em vez de uma varredura de pasta.
   máquina, não relacionado) e `ruff check src tests` (all checks passed) OK.
 - Fase 2 (UI em `main_window.py`) e Fase 3 (verificação pessoal do PM) ainda
   pendentes.
+
+## Status final
+
+Fase 2 (UI) concluída e commitada (`d43961e`): aba renomeada e botão de
+arquivo individual adicionado, reaproveitando `processar_arquivos` (Fase 1)
+via helper compartilhado `_processar_e_exibir`.
+
+Fase 3 (verificação pessoal) concluída: `pytest -q` (503 passed, 1 falha
+pré-existente e não relacionada em `test_ocr_real_tesseract`) e
+`ruff check src tests` (all checks passed) confirmados pelo PM. `.exe`
+recompilado (rebuild falhou uma vez por instabilidade transitória do pip
+ao instalar dependências de build — não relacionado ao código; refeito com
+sucesso na segunda tentativa). Confirmado visualmente via captura de janela
+real (`PrintWindow`) que a aba aparece corretamente como "Carregar
+Contratos" na barra de abas. Cliques sintéticos para trocar de aba e
+confirmar visualmente os dois botões dentro dela não funcionaram de forma
+confiável neste ambiente (limitação já registrada em memória do projeto) —
+essa parte específica fica confirmada pela revisão do diff + testes, não
+por captura visual da aba aberta.
+
+**Plano concluído.**

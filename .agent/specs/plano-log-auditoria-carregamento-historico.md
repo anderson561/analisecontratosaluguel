@@ -58,4 +58,25 @@ capturar tanto `RepositoryError` quanto qualquer exceção inesperada (ex.:
 graciosamente. `pytest -q` (493 passed, 4 skipped — falha pré-existente e não
 relacionada em `test_ocr_real_tesseract`, dependente do Tesseract do
 ambiente) e `ruff check src tests` (all checks passed) executados pelo
-desenvolvedor. Aguardando Fase 2 (verificação pessoal do PM).
+desenvolvedor. Fase 2 (verificação pessoal do PM) concluída, `.exe`
+recompilado e testado ao vivo.
+
+## Fase 3 (2026-08-12) — o bug ocorreu de novo, log do controller não pegou
+
+Usuário reprocessou os mesmos 9 contratos, fechou, esperou, reabriu — Painel
+apareceu vazio de novo. `dist\data\app.log` mostra 4 aberturas (incluindo
+3 de hoje, cobrindo antes/depois da reescrita), **todas** logando
+"9 contrato(s) carregado(s) do histórico" — nenhuma falha registrada em
+`carregar_historico()`. `processado_em` mais recente no banco bate
+exatamente com a gravação da reescrita. Ou seja: o controller está
+carregando os dados corretamente em toda abertura capturada — a suspeita
+agora é a camada de **exibição** (`presentation/views/main_window.py`,
+`_recarregar_painel`/`_desenhar_painel`), não a persistência. Hipótese do
+filtro "Índice" resetando sozinho foi descartada lendo o código-fonte do
+CustomTkinter (`ctk_optionmenu.py`: `configure(values=...)` não toca em
+`_current_value`).
+
+**Próxima ação:** estender `registrar_evento` para `_recarregar_painel()`
+em `main_window.py`, logando `tem_dados()`, os valores de filtro (índice/
+busca/auto) e `len(linhas)` resultante — isola exatamente em qual ponto da
+cadeia a contagem cai para zero na próxima ocorrência.

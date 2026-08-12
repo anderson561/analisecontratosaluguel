@@ -21,6 +21,7 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
+from contract_parser.infrastructure.audit_log import registrar_evento
 from contract_parser.presentation.controllers import AppController, ControllerError, LinhaPainel
 
 # Paleta de destaque (revisão) — cor + ícone/texto (nunca cor isolada).
@@ -319,15 +320,22 @@ class MainWindow(ctk.CTk):
 
     def _recarregar_painel(self) -> None:
         if not self._c.relatorio.tem_dados():
+            registrar_evento("Painel: tem_dados()=False, sem histórico para desenhar")
             return
         indices = ["(todos)", *self._c.relatorio.indices_disponiveis()]
         self._opt_indice.configure(values=indices)
 
         indice = self._opt_indice.get()
+        texto_busca = self._ent_busca.get() or None
+        auto = True if self._chk_auto.get() else None
         linhas = self._c.relatorio.filtrar(
             indice=None if indice == "(todos)" else indice,
-            apenas_automatico=True if self._chk_auto.get() else None,
-            texto=self._ent_busca.get() or None,
+            apenas_automatico=auto,
+            texto=texto_busca,
+        )
+        registrar_evento(
+            f"Painel: {len(linhas)} linha(s) apos filtro "
+            f"(indice={indice!r}, busca={texto_busca!r}, auto={auto!r})"
         )
         self._desenhar_painel(linhas)
 

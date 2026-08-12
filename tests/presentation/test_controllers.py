@@ -62,17 +62,17 @@ class FakeIngestor:
     """Ingestor que devolve um :class:`IngestaoResumo` pré-montado (sem IO)."""
 
     def __init__(self, resumo: IngestaoResumo) -> None:
-        self._resumo = resumo
+        self.resumo = resumo
         self.chamadas: list[str] = []
         self.chamadas_arquivos: list[list[str]] = []
 
     def ingerir(self, pasta) -> IngestaoResumo:
         self.chamadas.append(str(pasta))
-        return self._resumo
+        return self.resumo
 
     def ingerir_arquivos(self, caminhos) -> IngestaoResumo:
         self.chamadas_arquivos.append([str(c) for c in caminhos])
-        return self._resumo
+        return self.resumo
 
 
 class RepoQueFalha:
@@ -1080,3 +1080,142 @@ def test_app_processar_pasta_persiste_com_nome_e_hash_dos_documentos():
     assert repo_contratos.chamadas_salvar == ["c1.pdf", "c2.pdf"]
     registros = {r.arquivo_nome: r.arquivo_hash for r in repo_contratos.listar()}
     assert registros == {"c1.pdf": "hash-c1", "c2.pdf": "hash-c2"}
+
+
+# --------------------------------------------------------------------------- #
+# AppController: painel preserva histórico completo + bloqueio de
+# duplicidade ao anexar arquivo individual (Fase 1 do plano de correção)
+# --------------------------------------------------------------------------- #
+def _resumo_um_documento(caminho: str, hash_: str) -> IngestaoResumo:
+    texto = carregar_contrato(RESIDENCIAL_PF_PJ)
+    return IngestaoResumo(
+        total_arquivos=1,
+        processados=1,
+        documentos=[DocumentoTexto(caminho=caminho, hash=hash_, texto=texto, metodo="nativo")],
+    )
+
+
+def test_app_processar_pasta_preserva_contratos_de_lotes_anteriores():
+    """Regressão: anexar um novo lote não pode fazer os contratos já
+    carregados sumirem da tela (bug relatado pelo usuário)."""
+    repo_contratos = FakeContratoRepository()
+    ingestor = FakeIngestor(_resumo_um_documento("c1.pdf", "hash-c1"))
+    app = AppController(_repo_portfolio(), ingestor=ingestor, contrato_repo=repo_contratos)
+    app.processar_pasta("pastaA")
+    assert len(app.relatorio.linhas_painel()) == 1
+
+    ingestor.resumo = _resumo_um_documento("c2.pdf", "hash-c2")
+    app.processar_pasta("pastaB")
+
+    assert len(app.relatorio.linhas_painel()) == 2
+    assert {r.arquivo_nome for r in repo_contratos.listar()} == {"c1.pdf", "c2.pdf"}
+
+
+def test_app_processar_arquivos_preserva_contratos_de_lotes_anteriores():
+    """Mesma regressão do Painel, no fluxo de anexar arquivo(s) individual(is)."""
+    repo_contratos = FakeContratoRepository()
+    ingestor = FakeIngestor(_resumo_um_documento("c1.pdf", "hash-c1"))
+    app = AppController(_repo_portfolio(), ingestor=ingestor, contrato_repo=repo_contratos)
+    app.processar_arquivos(["c1.pdf"])
+    assert len(app.relatorio.linhas_painel()) == 1
+
+    ingestor.resumo = _resumo_um_documento("c2.pdf", "hash-c2")
+    app.processar_arquivos(["c2.pdf"])
+
+    assert len(app.relatorio.linhas_painel()) == 2
+    assert {r.arquivo_nome for r in repo_contratos.listar()} == {"c1.pdf", "c2.pdf"}
+
+
+def test_ja_persistido_true_quando_hash_existe_no_repo():
+    repo = FakeContratoRepository()
+    repo.salvar(
+        arquivo_nome="antigo.pdf",
+        arquivo_hash="hash-antigo",
+        contrato=_contrato_pf_pj(),
+        linha=RelatorioService(_repo_portfolio()).montar([_contrato_pf_pj()]).contratos.linhas[0],
+        revisao=False,
+    )
+    ctrl = RelatorioController(
+        RelatorioService(_repo_portfolio()),
+        ExcelRelatorioExporter(),
+        PdfRelatorioExporter(),
+        contrato_repo=repo,
+    )
+    assert ctrl.ja_persistido("hash-antigo") is True
+
+
+def test_ja_persistido_false_quando_hash_nao_existe():
+    ctrl = RelatorioController(
+        RelatorioService(_repo_portfolio()),
+        ExcelRelatorioExporter(),
+        PdfRelatorioExporter(),
+        contrato_repo=FakeContratoRepository(),
+    )
+    assert ctrl.ja_persistido("hash-inexistente") is False
+
+
+def test_ja_persistido_false_sem_contrato_repo():
+    ctrl = _relatorio_controller([_contrato_pf_pj()])
+    assert ctrl.ja_persistido("qualquer-hash") is False
+
+
+def test_ja_persistido_false_quando_repo_falha():
+    class RepoQueFalhaAoBuscarHash:
+        def buscar_por_hash(self, arquivo_hash):
+            raise RepositoryError("banco indisponivel")
+
+    ctrl = RelatorioController(
+        RelatorioService(_repo_portfolio()),
+        ExcelRelatorioExporter(),
+        PdfRelatorioExporter(),
+        contrato_repo=RepoQueFalhaAoBuscarHash(),
+    )
+    assert ctrl.ja_persistido("qualquer-hash") is False
+
+
+def test_app_processar_arquivos_bloqueia_duplicado_e_nao_persiste_de_novo():
+    repo_contratos = FakeContratoRepository()
+    repo_contratos.salvar(
+        arquivo_nome="dup.pdf",
+        arquivo_hash="hash-dup",
+        contrato=_contrato_pf_pj(),
+        linha=RelatorioService(_repo_portfolio()).montar([_contrato_pf_pj()]).contratos.linhas[0],
+        revisao=False,
+    )
+    ingestor = FakeIngestor(_resumo_um_documento("dup.pdf", "hash-dup"))
+    app = AppController(_repo_portfolio(), ingestor=ingestor, contrato_repo=repo_contratos)
+    chamadas_antes = list(repo_contratos.chamadas_salvar)
+
+    resultado = app.processar_arquivos(["dup.pdf"])
+
+    assert repo_contratos.chamadas_salvar == chamadas_antes
+    assert resultado.erros == [("dup.pdf", "Contrato já carregado anteriormente (duplicado).")]
+    assert len(app.relatorio.linhas_painel()) == 1
+
+
+def test_app_processar_arquivos_lote_misto_persiste_novo_e_bloqueia_duplicado():
+    repo_contratos = FakeContratoRepository()
+    repo_contratos.salvar(
+        arquivo_nome="dup.pdf",
+        arquivo_hash="hash-dup",
+        contrato=_contrato_pf_pj(),
+        linha=RelatorioService(_repo_portfolio()).montar([_contrato_pf_pj()]).contratos.linhas[0],
+        revisao=False,
+    )
+    texto = carregar_contrato(RESIDENCIAL_PF_PJ)
+    resumo = IngestaoResumo(
+        total_arquivos=2,
+        processados=2,
+        documentos=[
+            DocumentoTexto(caminho="novo.pdf", hash="hash-novo", texto=texto, metodo="nativo"),
+            DocumentoTexto(caminho="dup.pdf", hash="hash-dup", texto=texto, metodo="nativo"),
+        ],
+    )
+    ingestor = FakeIngestor(resumo)
+    app = AppController(_repo_portfolio(), ingestor=ingestor, contrato_repo=repo_contratos)
+
+    resultado = app.processar_arquivos(["novo.pdf", "dup.pdf"])
+
+    assert resultado.erros == [("dup.pdf", "Contrato já carregado anteriormente (duplicado).")]
+    assert repo_contratos.chamadas_salvar == ["dup.pdf", "novo.pdf"]
+    assert len(app.relatorio.linhas_painel()) == 2

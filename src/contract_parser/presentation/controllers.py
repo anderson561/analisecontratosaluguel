@@ -28,6 +28,7 @@ from pydantic import ValidationError
 from contract_parser.application.contract_extraction_service import ExtratorContrato
 from contract_parser.application.document_ingestor import (
     DiretorioIngestaoError,
+    ErroArquivo,
     IngestaoResumo,
 )
 from contract_parser.application.empresa_importer import (
@@ -449,6 +450,21 @@ class RelatorioController:
     def tem_dados(self) -> bool:
         return self._relatorio is not None
 
+    def ja_persistido(self, arquivo_hash: str) -> bool:
+        """``True`` quando já existe um registro persistido com este hash.
+
+        Usado por :meth:`AppController.processar_arquivos` para bloquear
+        duplicidade ao anexar arquivo individual (§Fase 1 do plano).
+        Degradação graciosa: ``False`` sem ``contrato_repo`` configurado ou se
+        a consulta falhar — nunca lança, nunca derruba a UI.
+        """
+        if self._contrato_repo is None:
+            return False
+        try:
+            return self._contrato_repo.buscar_por_hash(arquivo_hash) is not None
+        except RepositoryError:
+            return False
+
     def excluir_contrato(self, registro_id: str) -> None:
         """Exclui um contrato persistido e recarrega o Painel a partir do banco."""
         if self._contrato_repo is None:
@@ -641,21 +657,61 @@ class AppController:
             self.relatorio.carregar_historico()
 
     def processar_pasta(self, pasta: str | Path) -> ProcessamentoResultado:
-        """Processa a pasta E realimenta o Painel/Conformidade com os contratos."""
+        """Processa a pasta E realimenta o Painel/Conformidade com os contratos.
+
+        Recarrega o Painel a partir do banco completo depois de persistir o
+        lote novo (mesmo padrão de :meth:`RelatorioController.excluir_contrato`)
+        — o lote recém-processado não pode "apagar" da tela os contratos já
+        carregados em chamadas anteriores, que continuam intactos no banco.
+        """
         resultado = self.processamento.processar_pasta(pasta)
         self.relatorio.definir_contratos(
             resultado.contratos, documentos=resultado.ingestao.documentos
         )
+        self.relatorio.carregar_historico()
         return resultado
 
     def processar_arquivos(self, caminhos: list[str | Path]) -> ProcessamentoResultado:
         """Processa os arquivos escolhidos individualmente E realimenta o
-        Painel/Conformidade com os contratos. Espelha :meth:`processar_pasta`."""
+        Painel/Conformidade com os contratos. Espelha :meth:`processar_pasta`
+        (mesmo recarregamento do histórico completo ao final), mas bloqueia
+        duplicidade: um arquivo cujo hash já está persistido no histórico não é
+        regravado — vira um :class:`ErroArquivo` de duplicidade no resumo em
+        vez de duplicar o registro. O fluxo de pasta continua com o upsert já
+        existente (deliberadamente diferente — não mude ``processar_pasta``)."""
         resultado = self.processamento.processar_arquivos(caminhos)
-        self.relatorio.definir_contratos(
-            resultado.contratos, documentos=resultado.ingestao.documentos
+
+        documentos_novos: list[DocumentoTexto] = []
+        contratos_novos: list[Contrato] = []
+        erros_duplicidade: list[ErroArquivo] = []
+        pares = zip(resultado.ingestao.documentos, resultado.contratos, strict=True)
+        for documento, contrato in pares:
+            if self.relatorio.ja_persistido(documento.hash):
+                erros_duplicidade.append(
+                    ErroArquivo(
+                        Path(documento.caminho).name,
+                        "Contrato já carregado anteriormente (duplicado).",
+                    )
+                )
+            else:
+                documentos_novos.append(documento)
+                contratos_novos.append(contrato)
+
+        resultado_final = ProcessamentoResultado(
+            ingestao=IngestaoResumo(
+                total_arquivos=resultado.ingestao.total_arquivos,
+                processados=resultado.ingestao.processados,
+                duplicados=resultado.ingestao.duplicados,
+                erros=[*resultado.ingestao.erros, *erros_duplicidade],
+                documentos=documentos_novos,
+            ),
+            contratos=contratos_novos,
         )
-        return resultado
+        self.relatorio.definir_contratos(
+            resultado_final.contratos, documentos=resultado_final.ingestao.documentos
+        )
+        self.relatorio.carregar_historico()
+        return resultado_final
 
     def status_conexao(self) -> StatusConexao:
         """Estado do banco de dados para o banner da GUI. NUNCA lança (degradação §6)."""

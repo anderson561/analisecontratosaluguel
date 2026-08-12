@@ -282,6 +282,16 @@ class ProcessamentoController:
         self._contratos = contratos
         return ProcessamentoResultado(ingestao=ingestao, contratos=contratos)
 
+    def processar_arquivos(self, caminhos: list[str | Path]) -> ProcessamentoResultado:
+        """Ingere os ``caminhos`` (arquivos escolhidos individualmente), extrai
+        um :class:`Contrato` por documento aproveitável. Espelha
+        :meth:`processar_pasta`, mas sem exigir um diretório."""
+        ingestao = self._ingestor.ingerir_arquivos(caminhos)
+
+        contratos = [self._extrator.extrair(doc.texto) for doc in ingestao.documentos]
+        self._contratos = contratos
+        return ProcessamentoResultado(ingestao=ingestao, contratos=contratos)
+
     def contratos(self) -> list[Contrato]:
         """Contratos extraídos no último processamento (vazio antes de processar)."""
         return list(self._contratos)
@@ -633,6 +643,15 @@ class AppController:
     def processar_pasta(self, pasta: str | Path) -> ProcessamentoResultado:
         """Processa a pasta E realimenta o Painel/Conformidade com os contratos."""
         resultado = self.processamento.processar_pasta(pasta)
+        self.relatorio.definir_contratos(
+            resultado.contratos, documentos=resultado.ingestao.documentos
+        )
+        return resultado
+
+    def processar_arquivos(self, caminhos: list[str | Path]) -> ProcessamentoResultado:
+        """Processa os arquivos escolhidos individualmente E realimenta o
+        Painel/Conformidade com os contratos. Espelha :meth:`processar_pasta`."""
+        resultado = self.processamento.processar_arquivos(caminhos)
         self.relatorio.definir_contratos(
             resultado.contratos, documentos=resultado.ingestao.documentos
         )

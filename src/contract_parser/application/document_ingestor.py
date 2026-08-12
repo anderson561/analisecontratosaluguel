@@ -85,11 +85,53 @@ class DirectoryIngestor:
         if not pasta.is_dir():
             raise DiretorioIngestaoError(f"Diretório não encontrado: {pasta}")
 
+        arquivos = self._listar_arquivos(pasta)
+        resumo = self._processar(arquivos)
+        resumo.total_arquivos = len(arquivos)
+        return resumo
+
+    def ingerir_arquivos(self, caminhos: list[str | Path]) -> IngestaoResumo:
+        """Extrai e deduplica uma lista de arquivos escolhidos individualmente.
+
+        Diferente de :meth:`ingerir`, não exige um diretório: cada item de
+        ``caminhos`` é validado por si só (existe, é arquivo, extensão
+        suportada) — caminho inválido vira ``ErroArquivo`` no resumo, sem
+        abortar o lote (mesmo princípio de "erro por item não aborta" usado em
+        :meth:`ingerir`/``_processar``).
+        """
+        resumo = IngestaoResumo()
+        validos: list[Path] = []
+
+        for item in caminhos:
+            caminho = Path(item)
+            resumo.total_arquivos += 1
+            if not caminho.is_file():
+                resumo.erros.append(ErroArquivo(caminho.name, "Arquivo não encontrado."))
+                continue
+            if caminho.suffix.lower() not in EXTENSOES_SUPORTADAS:
+                resumo.erros.append(
+                    ErroArquivo(caminho.name, "Extensão de arquivo não suportada.")
+                )
+                continue
+            validos.append(caminho)
+
+        parcial = self._processar(validos)
+        resumo.processados = parcial.processados
+        resumo.duplicados = parcial.duplicados
+        resumo.erros.extend(parcial.erros)
+        resumo.documentos.extend(parcial.documentos)
+        return resumo
+
+    def _processar(self, arquivos: list[Path]) -> IngestaoResumo:
+        """Extrai e deduplica ``arquivos`` (laço compartilhado por ``ingerir``/
+        ``ingerir_arquivos``). NÃO conta ``total_arquivos`` — cada caller conta
+        os arquivos com seu próprio critério (varredura de pasta vs. lista
+        recebida, incluindo itens inválidos).
+        """
         resumo = IngestaoResumo()
         vistos: set[str] = set()
 
-        for caminho in self._listar_arquivos(pasta):
-            resumo.total_arquivos += 1
+        for caminho in arquivos:
             extrator = self._selecionar(caminho)
             if extrator is None:  # defensivo: filtro já restringe as extensões
                 resumo.erros.append(

@@ -152,3 +152,102 @@ def test_caminho_que_e_arquivo_levanta(tmp_path):
     arquivo.write_bytes(b"x")
     with pytest.raises(DiretorioIngestaoError):
         DirectoryIngestor([FakeExtractor(".pdf")]).ingerir(arquivo)
+
+
+# --------------------------------------------------------------------------- #
+# ingerir_arquivos: lista de arquivos individuais (em vez de varrer uma pasta)
+# --------------------------------------------------------------------------- #
+def test_ingerir_arquivos_arquivo_valido_unico(tmp_path):
+    _tocar(tmp_path, "a.pdf")
+    pdf = FakeExtractor(".pdf")
+
+    resumo = DirectoryIngestor([pdf]).ingerir_arquivos([tmp_path / "a.pdf"])
+
+    assert resumo.total_arquivos == 1
+    assert resumo.processados == 1
+    assert resumo.total_erros == 0
+    assert [c.name for c in pdf.chamadas] == ["a.pdf"]
+
+
+def test_ingerir_arquivos_multiplos_arquivos_validos(tmp_path):
+    _tocar(tmp_path, "a.pdf", "b.docx")
+    pdf = FakeExtractor(".pdf")
+    docx = FakeExtractor(".docx")
+
+    resumo = DirectoryIngestor([pdf, docx]).ingerir_arquivos(
+        [tmp_path / "a.pdf", tmp_path / "b.docx"]
+    )
+
+    assert resumo.total_arquivos == 2
+    assert resumo.processados == 2
+    assert [c.name for c in pdf.chamadas] == ["a.pdf"]
+    assert [c.name for c in docx.chamadas] == ["b.docx"]
+
+
+def test_ingerir_arquivos_caminho_inexistente_vira_erro_sem_abortar(tmp_path):
+    inexistente = tmp_path / "fantasma.pdf"
+
+    resumo = DirectoryIngestor([FakeExtractor(".pdf")]).ingerir_arquivos([inexistente])
+
+    assert resumo.total_arquivos == 1
+    assert resumo.processados == 0
+    assert resumo.total_erros == 1
+    assert resumo.erros[0].arquivo == "fantasma.pdf"
+
+
+def test_ingerir_arquivos_caminho_que_e_pasta_vira_erro(tmp_path):
+    subpasta = tmp_path / "subpasta"
+    subpasta.mkdir()
+
+    resumo = DirectoryIngestor([FakeExtractor(".pdf")]).ingerir_arquivos([subpasta])
+
+    assert resumo.total_arquivos == 1
+    assert resumo.processados == 0
+    assert resumo.total_erros == 1
+    assert resumo.erros[0].arquivo == "subpasta"
+
+
+def test_ingerir_arquivos_extensao_nao_suportada_vira_erro(tmp_path):
+    _tocar(tmp_path, "notas.txt")
+
+    resumo = DirectoryIngestor([FakeExtractor(".pdf")]).ingerir_arquivos(
+        [tmp_path / "notas.txt"]
+    )
+
+    assert resumo.total_arquivos == 1
+    assert resumo.processados == 0
+    assert resumo.total_erros == 1
+    assert resumo.erros[0].arquivo == "notas.txt"
+
+
+def test_ingerir_arquivos_mix_validos_e_invalidos(tmp_path):
+    _tocar(tmp_path, "a.pdf", "notas.txt")
+    pdf = FakeExtractor(".pdf")
+    inexistente = tmp_path / "fantasma.docx"
+
+    resumo = DirectoryIngestor([pdf]).ingerir_arquivos(
+        [tmp_path / "a.pdf", tmp_path / "notas.txt", inexistente]
+    )
+
+    assert resumo.total_arquivos == 3
+    assert resumo.processados == 1
+    assert resumo.total_erros == 2
+    erros_nomes = {e.arquivo for e in resumo.erros}
+    assert erros_nomes == {"notas.txt", "fantasma.docx"}
+    assert [c.name for c in pdf.chamadas] == ["a.pdf"]
+
+
+def test_ingerir_arquivos_deduplica_por_hash(tmp_path):
+    _tocar(tmp_path, "a.pdf", "copia.pdf")
+    duplicador = FakeExtractor(
+        ".pdf",
+        resultado=DocumentoTexto(caminho="x", hash="MESMO_HASH", texto="t", metodo="nativo"),
+    )
+
+    resumo = DirectoryIngestor([duplicador]).ingerir_arquivos(
+        [tmp_path / "a.pdf", tmp_path / "copia.pdf"]
+    )
+
+    assert resumo.processados == 1
+    assert resumo.duplicados == 1
+    assert len(resumo.documentos) == 1

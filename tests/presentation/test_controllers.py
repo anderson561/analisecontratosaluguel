@@ -64,9 +64,14 @@ class FakeIngestor:
     def __init__(self, resumo: IngestaoResumo) -> None:
         self._resumo = resumo
         self.chamadas: list[str] = []
+        self.chamadas_arquivos: list[list[str]] = []
 
     def ingerir(self, pasta) -> IngestaoResumo:
         self.chamadas.append(str(pasta))
+        return self._resumo
+
+    def ingerir_arquivos(self, caminhos) -> IngestaoResumo:
+        self.chamadas_arquivos.append([str(c) for c in caminhos])
         return self._resumo
 
 
@@ -314,6 +319,37 @@ def test_processar_pasta_propaga_erros_por_arquivo():
     ctrl = ProcessamentoController(FakeIngestor(resumo), ExtratorContrato())
     resultado = ctrl.processar_pasta("x")
     assert resultado.erros == [("corrompido.pdf", "Falha ao abrir PDF")]
+    assert resultado.contratos == []
+
+
+def test_processar_arquivos_extrai_um_contrato_por_documento():
+    texto = carregar_contrato(RESIDENCIAL_PF_PJ)
+    resumo = IngestaoResumo(
+        total_arquivos=1,
+        processados=1,
+        documentos=[DocumentoTexto(caminho="c1.pdf", hash="h1", texto=texto, metodo="nativo")],
+    )
+    ingestor = FakeIngestor(resumo)
+    ctrl = ProcessamentoController(ingestor, ExtratorContrato())
+    resultado = ctrl.processar_arquivos(["c1.pdf"])
+
+    assert resultado.total_arquivos == 1
+    assert resultado.processados == 1
+    assert len(resultado.contratos) == 1
+    assert isinstance(resultado.contratos[0], Contrato)
+    assert ctrl.contratos() == resultado.contratos
+    assert ingestor.chamadas_arquivos == [["c1.pdf"]]
+
+
+def test_processar_arquivos_propaga_erros_por_arquivo():
+    resumo = IngestaoResumo(
+        total_arquivos=1,
+        processados=0,
+        erros=[ErroArquivo("fantasma.pdf", "Arquivo não encontrado.")],
+    )
+    ctrl = ProcessamentoController(FakeIngestor(resumo), ExtratorContrato())
+    resultado = ctrl.processar_arquivos(["fantasma.pdf"])
+    assert resultado.erros == [("fantasma.pdf", "Arquivo não encontrado.")]
     assert resultado.contratos == []
 
 
@@ -946,6 +982,23 @@ def test_app_processar_pasta_realimenta_painel_e_conformidade():
 
     assert app.relatorio.tem_dados() is True
     assert len(app.relatorio.linhas_painel()) == 1
+
+
+def test_app_processar_arquivos_realimenta_painel_e_conformidade():
+    texto = carregar_contrato(RESIDENCIAL_PF_PJ)
+    resumo = IngestaoResumo(
+        total_arquivos=1,
+        processados=1,
+        documentos=[DocumentoTexto(caminho="c1.pdf", hash="h1", texto=texto, metodo="nativo")],
+    )
+    ingestor = FakeIngestor(resumo)
+    app = AppController(_repo_portfolio(), ingestor=ingestor)
+    resultado = app.processar_arquivos(["c1.pdf"])
+
+    assert app.relatorio.tem_dados() is True
+    assert len(app.relatorio.linhas_painel()) == 1
+    assert resultado.contratos == app.processamento.contratos()
+    assert ingestor.chamadas_arquivos == [["c1.pdf"]]
 
 
 def test_status_conexao_ok():

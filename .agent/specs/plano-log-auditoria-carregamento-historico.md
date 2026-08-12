@@ -80,3 +80,42 @@ CustomTkinter (`ctk_optionmenu.py`: `configure(values=...)` não toca em
 em `main_window.py`, logando `tem_dados()`, os valores de filtro (índice/
 busca/auto) e `len(linhas)` resultante — isola exatamente em qual ponto da
 cadeia a contagem cai para zero na próxima ocorrência.
+
+## Causa raiz encontrada (2026-08-12) — bug de tela, não de banco
+
+Capturando a janela real do `.exe` (via `PrintWindow`, contornando o fato de
+a janela abrir minimizada neste ambiente) e lendo `MainWindow.__init__` em
+`presentation/views/main_window.py`, confirmado: o construtor chama
+`_construir_aba_empresas()`, `_construir_aba_processamento()`,
+`_construir_aba_painel()`, `_construir_aba_conformidade()`, depois
+`_atualizar_status()` e `_recarregar_empresas()` — **mas nunca chama
+`_recarregar_painel()`**. Esse método só é invocado por: botão "Filtrar",
+botão "Limpar" (`_limpar_filtros`), e depois de processar uma pasta
+(`_on_processar_pasta`) ou excluir/limpar contratos.
+
+Isso explica 100% do sintoma relatado: o controller carrega o histórico
+persistido corretamente todo início (confirmado pelo log da Fase 1/2 — nunca
+falhou), mas a aba "Painel de Contratos" nunca desenha essas linhas na
+abertura, só depois de uma ação explícita (processar/filtrar/limpar) na
+mesma sessão. Não é bug de persistência, race condition de SQLite, ou
+fragilidade do banco — é só uma chamada de refresh ausente na inicialização
+da tela.
+
+**Correção (Fase 4):** chamar `self._recarregar_painel()` no final de
+`MainWindow.__init__()`, ao lado de `self._recarregar_empresas()`, para que
+o Painel mostre o histórico persistido imediatamente ao abrir o app.
+
+## Status final
+
+Fase 4 concluída: `MainWindow.__init__` agora chama `self._recarregar_painel()`
+e `self._recarregar_conformidade()` (bug irmão idêntico encontrado na mesma
+revisão — a aba Conformidade tinha exatamente o mesmo problema) logo após
+`self._recarregar_empresas()`. `pytest -q` (493 passed, 4 skipped, 1 falha
+pré-existente e não relacionada em `test_ocr_real_tesseract`) e
+`ruff check src tests` (all checks passed) confirmados pessoalmente pelo PM.
+`.exe` recompilado e validado ao vivo (captura da janela real via
+`PrintWindow`, contornando a janela abrir minimizada neste ambiente).
+
+**Plano concluído.** O log de auditoria (`data/app.log`) permanece no
+código como ferramenta de diagnóstico permanente (não é a correção em si,
+mas provou onde o bug estava e continua útil para futuras investigações).

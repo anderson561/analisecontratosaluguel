@@ -103,6 +103,8 @@ class MainWindow(ctk.CTk):
 
         self._atualizar_status()
         self._recarregar_empresas()
+        self._recarregar_painel()
+        self._recarregar_conformidade()
 
     # ------------------------------------------------------------------ #
     # Banner de status (conexão com o banco de dados SQLite)

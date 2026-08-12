@@ -108,3 +108,15 @@ já persistido, virando `ErroArquivo` de duplicidade em vez de regravar —
 fluxo de pasta mantém o upsert original, sem mudança. 511 testes passando
 (1 falha pré-existente e não relacionada, `test_ocr_real_tesseract`) e
 `ruff check src tests` limpo, confirmados pessoalmente pelo PM.
+
+## Fase 2 (verificação pessoal) concluída
+
+`.exe` recompilado com sucesso. Validado com dados reais (arquivos de
+`L:\SETOR FISCAL\CONTRATOS DE ALUGUEL`, via simulação fiel do `.exe`
+real — `sys.frozen`/`sys.executable` monkey-patched chamando
+`build_controller()` de produção, banco isolado em pasta temporária):
+anexar um arquivo (1 linha) → anexar um segundo arquivo diferente (2
+linhas — confirma que o primeiro não sumiu) → reanexar o primeiro arquivo
+de novo (bloqueado como duplicado, Painel continua com 2 linhas).
+
+**Plano concluído.**

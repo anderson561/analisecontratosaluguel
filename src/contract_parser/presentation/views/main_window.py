@@ -16,13 +16,19 @@ Acessibilidade/UX (skill ux-ui-designer-pro):
 from __future__ import annotations
 
 import tkinter as tk
+from collections.abc import Callable
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
 from contract_parser.infrastructure.audit_log import registrar_evento
-from contract_parser.presentation.controllers import AppController, ControllerError, LinhaPainel
+from contract_parser.presentation.controllers import (
+    AppController,
+    ControllerError,
+    LinhaPainel,
+    ProcessamentoResultado,
+)
 
 # Paleta de destaque (revisão) — cor + ícone/texto (nunca cor isolada).
 _COR_REVISAO = "#8A5A00"
@@ -92,7 +98,7 @@ class MainWindow(ctk.CTk):
         self._tabs = ctk.CTkTabview(self)
         self._tabs.pack(fill="both", expand=True, padx=12, pady=(0, 12))
         self._tab_empresas = self._tabs.add("Empresas")
-        self._tab_processamento = self._tabs.add("Processamento")
+        self._tab_processamento = self._tabs.add("Carregar Contratos")
         self._tab_painel = self._tabs.add("Painel de Contratos")
         self._tab_conformidade = self._tabs.add("Conformidade")
 
@@ -251,6 +257,9 @@ class MainWindow(ctk.CTk):
         ctk.CTkButton(
             topo, text="Selecionar pasta e processar…", command=self._on_processar
         ).pack(side="left", padx=4)
+        ctk.CTkButton(
+            topo, text="Selecionar arquivo(s) e processar…", command=self._on_processar_arquivos
+        ).pack(side="left", padx=4)
         self._lbl_proc = ctk.CTkLabel(topo, text="Nenhuma pasta processada.", anchor="w")
         self._lbl_proc.pack(side="left", padx=12)
 
@@ -261,10 +270,26 @@ class MainWindow(ctk.CTk):
         pasta = filedialog.askdirectory(title="Selecione a pasta de contratos")
         if not pasta:
             return
+        self._processar_e_exibir(lambda: self._c.processar_pasta(pasta), f"Pasta: {pasta}")
+
+    def _on_processar_arquivos(self) -> None:
+        caminhos = filedialog.askopenfilenames(
+            title="Selecione o(s) arquivo(s) de contratos",
+            filetypes=[("Contratos", "*.pdf *.docx"), ("Todos", "*.*")],
+        )
+        if not caminhos:
+            return
+        lista = list(caminhos)
+        origem = "Arquivos:\n" + "\n".join(f"  {caminho}" for caminho in lista)
+        self._processar_e_exibir(lambda: self._c.processar_arquivos(lista), origem)
+
+    def _processar_e_exibir(
+        self, chamada: Callable[[], ProcessamentoResultado], origem: str
+    ) -> None:
         try:
-            resultado = self._c.processar_pasta(pasta)
+            resultado = chamada()
         except ControllerError as exc:
-            messagebox.showerror("Processamento", str(exc))
+            messagebox.showerror("Carregar Contratos", str(exc))
             self._atualizar_status()
             return
         self._lbl_proc.configure(
@@ -274,7 +299,7 @@ class MainWindow(ctk.CTk):
             )
         )
         self._log_proc.delete("1.0", "end")
-        self._log_proc.insert("end", f"Pasta: {pasta}\n\n")
+        self._log_proc.insert("end", f"{origem}\n\n")
         self._log_proc.insert("end", f"Contratos extraídos: {len(resultado.contratos)}\n")
         if resultado.erros:
             self._log_proc.insert("end", "\nErros por arquivo:\n")

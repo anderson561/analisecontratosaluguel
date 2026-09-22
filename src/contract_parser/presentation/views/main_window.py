@@ -30,10 +30,23 @@ from contract_parser.presentation.controllers import (
     ProcessamentoResultado,
 )
 
-# Paleta de destaque (revisão) — cor + ícone/texto (nunca cor isolada).
-_COR_REVISAO = "#8A5A00"
-_COR_OK = "#1B5E20"
-_COR_ERRO = "#B00020"
+# Paleta Material Design 3 (light) — cor + ícone/texto (nunca cor isolada).
+# Ver ~/.claude/agents/specs/plano-redesign-material-design-light.md (Fase 1)
+# para as justificativas de cada token e a verificação de contraste WCAG AA.
+_COR_PRIMARIA = "#0B57A4"
+_COR_PRIMARIA_HOVER = "#0A4A8C"
+_COR_PRIMARIA_CONTAINER = "#D7E3F8"
+_COR_SECUNDARIA = "#55606E"
+_COR_SUPERFICIE = "#FFFFFF"
+_COR_SUPERFICIE_ALT = "#EEF1F6"
+_COR_FUNDO = "#F4F6FA"
+_COR_TEXTO = "#1B1F27"
+_COR_TEXTO_SECUNDARIO = "#49505A"
+_COR_BORDA = "#C4CAD3"
+_COR_OK = "#1B5E20"          # mantido, já validado
+_COR_REVISAO = "#8A5A00"     # mantido, já validado
+_COR_ERRO = "#B3261E"        # era #B00020 (token Material 2); token oficial MD3 light
+_COR_ERRO_CONTAINER = "#F9DEDC"
 
 
 class _Tooltip:
@@ -65,8 +78,8 @@ class _Tooltip:
         tk.Label(
             self._janela,
             text=self._texto,
-            background="#FFFFE0",
-            foreground="#000000",
+            background="#313033",
+            foreground="#FFFFFF",
             relief="solid",
             borderwidth=1,
             justify="left",
@@ -90,12 +103,16 @@ class MainWindow(ctk.CTk):
 
         self.title("AI Contract Parser — Leitor de Contratos de Locação")
         self.geometry("1180x760")
-        ctk.set_appearance_mode("system")
+        # Modo claro travado (não "system"): com o Windows em modo escuro, os
+        # widgets sem cor customizada escureceriam sozinhos enquanto os tokens
+        # novos (_COR_*) continuam claros, resultando numa UI inconsistente.
+        ctk.set_appearance_mode("light")
         ctk.set_default_color_theme("blue")
+        self.configure(fg_color=_COR_FUNDO)
 
         self._construir_banner_status()
 
-        self._tabs = ctk.CTkTabview(self)
+        self._tabs = ctk.CTkTabview(self, fg_color=_COR_SUPERFICIE)
         self._tabs.pack(fill="both", expand=True, padx=12, pady=(0, 12))
         self._tab_empresas = self._tabs.add("Empresas")
         self._tab_processamento = self._tabs.add("Carregar Contratos")
@@ -134,7 +151,11 @@ class MainWindow(ctk.CTk):
         topo.pack(fill="x", padx=8, pady=8)
 
         ctk.CTkButton(
-            topo, text="Importar .xlsx/.csv/.ods…", command=self._on_importar
+            topo,
+            text="Importar .xlsx/.csv/.ods…",
+            fg_color=_COR_PRIMARIA,
+            hover_color=_COR_PRIMARIA_HOVER,
+            command=self._on_importar,
         ).pack(side="left", padx=4)
         self._lbl_import = ctk.CTkLabel(topo, text="", anchor="w")
         self._lbl_import.pack(side="left", padx=12)
@@ -145,14 +166,22 @@ class MainWindow(ctk.CTk):
         self._ent_cnpj.pack(side="left", padx=4)
         self._ent_razao = ctk.CTkEntry(form, placeholder_text="Razão Social", width=320)
         self._ent_razao.pack(side="left", padx=4)
-        ctk.CTkButton(form, text="Adicionar", command=self._on_adicionar).pack(side="left", padx=4)
-        ctk.CTkButton(form, text="Salvar edição", command=self._on_editar).pack(side="left", padx=4)
+        ctk.CTkButton(
+            form,
+            text="Adicionar",
+            fg_color=_COR_PRIMARIA,
+            hover_color=_COR_PRIMARIA_HOVER,
+            command=self._on_adicionar,
+        ).pack(side="left", padx=4)
+        ctk.CTkButton(
+            form, text="Salvar edição", fg_color=_COR_SECUNDARIA, command=self._on_editar
+        ).pack(side="left", padx=4)
         ctk.CTkButton(
             form, text="Remover", fg_color=_COR_ERRO, command=self._on_remover
         ).pack(side="left", padx=4)
 
         self._tabela_empresas = ctk.CTkScrollableFrame(
-            self._tab_empresas, label_text="Portfólio cadastrado"
+            self._tab_empresas, label_text="Portfólio cadastrado", fg_color=_COR_SUPERFICIE
         )
         self._tabela_empresas.pack(fill="both", expand=True, padx=8, pady=8)
 
@@ -255,10 +284,17 @@ class MainWindow(ctk.CTk):
         topo = ctk.CTkFrame(self._tab_processamento)
         topo.pack(fill="x", padx=8, pady=8)
         ctk.CTkButton(
-            topo, text="Selecionar pasta e processar…", command=self._on_processar
+            topo,
+            text="Selecionar pasta e processar…",
+            fg_color=_COR_PRIMARIA,
+            hover_color=_COR_PRIMARIA_HOVER,
+            command=self._on_processar,
         ).pack(side="left", padx=4)
         ctk.CTkButton(
-            topo, text="Selecionar arquivo(s) e processar…", command=self._on_processar_arquivos
+            topo,
+            text="Selecionar arquivo(s) e processar…",
+            fg_color=_COR_SECUNDARIA,
+            command=self._on_processar_arquivos,
         ).pack(side="left", padx=4)
         self._lbl_proc = ctk.CTkLabel(topo, text="Nenhuma pasta processada.", anchor="w")
         self._lbl_proc.pack(side="left", padx=12)
@@ -324,18 +360,24 @@ class MainWindow(ctk.CTk):
 
         self._ent_busca = ctk.CTkEntry(filtros, placeholder_text="Buscar (locatário/locador)…", width=280)
         self._ent_busca.pack(side="left", padx=4)
-        ctk.CTkButton(filtros, text="Filtrar", command=self._recarregar_painel).pack(
-            side="left", padx=4
-        )
-        ctk.CTkButton(filtros, text="Limpar", command=self._limpar_filtros).pack(
-            side="left", padx=4
-        )
+        ctk.CTkButton(
+            filtros,
+            text="Filtrar",
+            fg_color=_COR_PRIMARIA,
+            hover_color=_COR_PRIMARIA_HOVER,
+            command=self._recarregar_painel,
+        ).pack(side="left", padx=4)
+        ctk.CTkButton(
+            filtros, text="Limpar", fg_color=_COR_SECUNDARIA, command=self._limpar_filtros
+        ).pack(side="left", padx=4)
         ctk.CTkButton(
             filtros, text="Limpar tudo", fg_color=_COR_ERRO, command=self._on_limpar_tudo
         ).pack(side="left", padx=4)
 
         self._tabela_painel = ctk.CTkScrollableFrame(
-            self._tab_painel, label_text="Relatório 01 — Contratos processados"
+            self._tab_painel,
+            label_text="Relatório 01 — Contratos processados",
+            fg_color=_COR_SUPERFICIE,
         )
         self._tabela_painel.pack(fill="both", expand=True, padx=8, pady=8)
 
@@ -438,18 +480,28 @@ class MainWindow(ctk.CTk):
     def _construir_aba_conformidade(self) -> None:
         acoes = ctk.CTkFrame(self._tab_conformidade)
         acoes.pack(fill="x", padx=8, pady=8)
-        ctk.CTkButton(acoes, text="Exportar Excel…", command=lambda: self._on_exportar("excel")).pack(
-            side="left", padx=4
-        )
-        ctk.CTkButton(acoes, text="Exportar PDF…", command=lambda: self._on_exportar("pdf")).pack(
-            side="left", padx=4
-        )
+        ctk.CTkButton(
+            acoes,
+            text="Exportar Excel…",
+            fg_color=_COR_PRIMARIA,
+            hover_color=_COR_PRIMARIA_HOVER,
+            command=lambda: self._on_exportar("excel"),
+        ).pack(side="left", padx=4)
+        ctk.CTkButton(
+            acoes,
+            text="Exportar PDF…",
+            fg_color=_COR_PRIMARIA,
+            hover_color=_COR_PRIMARIA_HOVER,
+            command=lambda: self._on_exportar("pdf"),
+        ).pack(side="left", padx=4)
 
         self._box_totais = ctk.CTkFrame(self._tab_conformidade)
         self._box_totais.pack(fill="x", padx=8, pady=4)
 
         self._tabela_pendencias = ctk.CTkScrollableFrame(
-            self._tab_conformidade, label_text="Pendências — contratos não encontrados"
+            self._tab_conformidade,
+            label_text="Pendências — contratos não encontrados",
+            fg_color=_COR_SUPERFICIE,
         )
         self._tabela_pendencias.pack(fill="both", expand=True, padx=8, pady=8)
 

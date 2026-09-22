@@ -16,9 +16,10 @@ Acessibilidade/UX (skill ux-ui-designer-pro):
 from __future__ import annotations
 
 import tkinter as tk
+import tkinter.font as tkfont
 from collections.abc import Callable
 from pathlib import Path
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 
 import customtkinter as ctk
 
@@ -49,51 +50,6 @@ _COR_ERRO = "#B3261E"        # era #B00020 (token Material 2); token oficial MD3
 _COR_ERRO_CONTAINER = "#F9DEDC"
 
 
-class _Tooltip:
-    """Tooltip simples de hover (bind Enter/Leave + Toplevel sem decoração).
-
-    Não depende de nenhuma lib externa — primeira implementação do tipo neste
-    projeto (ver .agent/specs/plano-3-features-persistencia-pdf-tooltip.md,
-    Fase 5). Só liga o hover quando há texto (evita bind inútil em células
-    sem motivo de revisão) e destrói a janela ao sair, para não deixar a
-    tooltip "grudada" na tela quando o mouse sai do widget.
-    """
-
-    def __init__(self, widget: ctk.CTkBaseClass, texto: str) -> None:
-        self._widget = widget
-        self._texto = texto
-        self._janela: tk.Toplevel | None = None
-        if texto:
-            widget.bind("<Enter>", self._mostrar)
-            widget.bind("<Leave>", self._esconder)
-
-    def _mostrar(self, event: object = None) -> None:
-        if self._janela is not None:
-            return
-        x = self._widget.winfo_rootx() + 12
-        y = self._widget.winfo_rooty() + self._widget.winfo_height() + 4
-        self._janela = tk.Toplevel(self._widget)
-        self._janela.wm_overrideredirect(True)
-        self._janela.wm_geometry(f"+{x}+{y}")
-        tk.Label(
-            self._janela,
-            text=self._texto,
-            background="#313033",
-            foreground="#FFFFFF",
-            relief="solid",
-            borderwidth=1,
-            justify="left",
-            wraplength=360,
-            padx=6,
-            pady=4,
-        ).pack()
-
-    def _esconder(self, event: object = None) -> None:
-        if self._janela is not None:
-            self._janela.destroy()
-            self._janela = None
-
-
 class MainWindow(ctk.CTk):
     """Janela raiz com as quatro áreas do RF06 em abas."""
 
@@ -111,6 +67,7 @@ class MainWindow(ctk.CTk):
         self.configure(fg_color=_COR_FUNDO)
 
         self._construir_banner_status()
+        self._configurar_estilo_treeview()
 
         self._tabs = ctk.CTkTabview(self, fg_color=_COR_SUPERFICIE)
         self._tabs.pack(fill="both", expand=True, padx=12, pady=(0, 12))
@@ -144,6 +101,39 @@ class MainWindow(ctk.CTk):
         cor = _COR_OK if status.ok else _COR_ERRO
         prefixo = "Banco de dados OK" if status.ok else "Sem conexão com o banco"
         self._banner.configure(text=f"{icone}  {prefixo} — {status.detalhe}", text_color=cor)
+
+    # ------------------------------------------------------------------ #
+    # Estilo ttk.Treeview (compartilhado por Painel e Empresas — configurado
+    # uma única vez aqui para não duplicar a mesma configuração nas duas
+    # abas; ver plano-migracao-treeview-tabelas.md, Fase 2/3)
+    # ------------------------------------------------------------------ #
+    def _configurar_estilo_treeview(self) -> None:
+        # Tema "clam": é o único tema ttk que aceita customizar cores do
+        # Treeview de forma consistente entre plataformas (o tema padrão do
+        # Tk ignora várias opções de cor dependendo do SO/tema do sistema).
+        style = ttk.Style(self)
+        style.theme_use("clam")
+        fonte_cabecalho = tkfont.Font(family="Segoe UI", size=10, weight="bold")
+        style.configure(
+            "Treeview",
+            background=_COR_SUPERFICIE,
+            fieldbackground=_COR_SUPERFICIE,
+            foreground=_COR_TEXTO,
+            rowheight=28,
+            borderwidth=0,
+        )
+        style.configure(
+            "Treeview.Heading",
+            background=_COR_SUPERFICIE_ALT,
+            foreground=_COR_TEXTO,
+            font=fonte_cabecalho,
+            relief="flat",
+        )
+        style.map(
+            "Treeview",
+            background=[("selected", _COR_PRIMARIA_CONTAINER)],
+            foreground=[("selected", _COR_TEXTO)],
+        )
 
     # ------------------------------------------------------------------ #
     # Aba Empresas
@@ -398,6 +388,22 @@ class MainWindow(ctk.CTk):
     # ------------------------------------------------------------------ #
     # Aba Painel de Contratos (Relatório 01)
     # ------------------------------------------------------------------ #
+    # Colunas de dados do Treeview do Painel — id interno, cabeçalho exibido
+    # e largura inicial (px). Uma única fonte de verdade para não desalinhar
+    # heading/coluna (era exatamente o bug do layout anterior).
+    _COLS_PAINEL: tuple[tuple[str, str, int], ...] = (
+        ("locatario", "Locatário", 190),
+        ("locador", "Locador", 190),
+        ("valor", "Valor", 90),
+        ("irrf", "IRRF", 90),
+        ("reducao_irrf", "Redução IRRF", 120),
+        ("indice", "Índice", 70),
+        ("proximo_reajuste", "Próx. Reajuste", 135),
+        ("automatico", "Auto?", 60),
+        ("vencimento", "Vencimento", 120),
+        ("revisao", "Revisão", 90),
+    )
+
     def _construir_aba_painel(self) -> None:
         linha_filtros = ctk.CTkFrame(self._tab_painel)
         linha_filtros.pack(fill="x", padx=8, pady=(8, 4))
@@ -426,16 +432,69 @@ class MainWindow(ctk.CTk):
         ctk.CTkButton(
             linha_acoes, text="Limpar", fg_color=_COR_SECUNDARIA, command=self._limpar_filtros
         ).pack(side="left", padx=4)
+        # Empacotados da direita para a esquerda: "Limpar tudo" primeiro fica
+        # na borda direita, "Excluir selecionado" fica logo à esquerda dele.
         ctk.CTkButton(
             linha_acoes, text="Limpar tudo", fg_color=_COR_ERRO, command=self._on_limpar_tudo
+        ).pack(side="right", padx=(4, 4))
+        ctk.CTkButton(
+            linha_acoes,
+            text="Excluir selecionado",
+            fg_color=_COR_ERRO,
+            command=self._on_excluir_selecionados,
         ).pack(side="right", padx=(24, 4))
 
-        self._tabela_painel = ctk.CTkScrollableFrame(
-            self._tab_painel,
-            label_text="Relatório 01 — Contratos processados",
-            fg_color=_COR_SUPERFICIE,
+        container = ctk.CTkFrame(self._tab_painel, fg_color="transparent")
+        container.pack(fill="both", expand=True, padx=8, pady=8)
+
+        ctk.CTkLabel(
+            container,
+            text="Relatório 01 — Contratos processados",
+            font=ctk.CTkFont(weight="bold"),
+            anchor="w",
+        ).pack(fill="x", pady=(0, 6))
+
+        tabela_frame = ctk.CTkFrame(container, fg_color=_COR_SUPERFICIE)
+        tabela_frame.pack(fill="both", expand=True)
+
+        colunas = [col_id for col_id, _texto, _largura in self._COLS_PAINEL]
+        self._tree_painel = ttk.Treeview(tabela_frame, columns=colunas, show="headings")
+        for col_id, texto, largura in self._COLS_PAINEL:
+            self._tree_painel.heading(col_id, text=texto)
+            self._tree_painel.column(col_id, width=largura, anchor="w")
+        self._tree_painel.tag_configure("par", background=_COR_SUPERFICIE_ALT)
+        self._tree_painel.tag_configure("impar", background=_COR_SUPERFICIE)
+        self._tree_painel.tag_configure("revisao", foreground=_COR_REVISAO)
+
+        scrollbar = ttk.Scrollbar(
+            tabela_frame, orient="vertical", command=self._tree_painel.yview
         )
-        self._tabela_painel.pack(fill="both", expand=True, padx=8, pady=8)
+        scrollbar_h = ttk.Scrollbar(
+            tabela_frame, orient="horizontal", command=self._tree_painel.xview
+        )
+        self._tree_painel.configure(
+            yscrollcommand=scrollbar.set, xscrollcommand=scrollbar_h.set
+        )
+        tabela_frame.grid_rowconfigure(0, weight=1)
+        tabela_frame.grid_columnconfigure(0, weight=1)
+        self._tree_painel.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        scrollbar_h.grid(row=1, column=0, sticky="ew")
+
+        self._col_revisao_id = f"#{colunas.index('revisao') + 1}"
+        self._mapa_painel_iid_registro: dict[str, str] = {}
+        self._mapa_painel_motivo: dict[str, str] = {}
+        self._tooltip_painel: tk.Toplevel | None = None
+        self._tooltip_painel_chave: tuple[str, str] | None = None
+        self._tree_painel.bind("<Motion>", self._on_motion_painel)
+        self._tree_painel.bind("<Leave>", self._esconder_tooltip_painel)
+
+        self._lbl_painel_vazio = ctk.CTkLabel(
+            container, text="", text_color=_COR_TEXTO_SECUNDARIO, anchor="w"
+        )
+        # Não empacotado ainda: só aparece quando não há linhas a mostrar
+        # (ver _mostrar_estado_vazio_painel), evitando flicker de
+        # criar/destruir o widget a cada recarga.
 
     def _limpar_filtros(self) -> None:
         self._opt_indice.set("(todos)")
@@ -443,19 +502,21 @@ class MainWindow(ctk.CTk):
         self._ent_busca.delete(0, "end")
         self._recarregar_painel()
 
+    def _mostrar_estado_vazio_painel(self, mensagem: str) -> None:
+        self._lbl_painel_vazio.configure(text=mensagem)
+        self._lbl_painel_vazio.pack(fill="x", pady=(4, 0))
+
+    def _esconder_estado_vazio_painel(self) -> None:
+        self._lbl_painel_vazio.pack_forget()
+
     def _recarregar_painel(self) -> None:
         if not self._c.relatorio.tem_dados():
             registrar_evento("Painel: tem_dados()=False, sem histórico para desenhar")
-            for w in self._tabela_painel.winfo_children():
-                w.destroy()
-            ctk.CTkLabel(
-                self._tabela_painel,
-                text=(
-                    "Nenhum contrato processado ainda — vá em 'Carregar Contratos' "
-                    "para começar."
-                ),
-                text_color=_COR_TEXTO_SECUNDARIO,
-            ).grid(row=0, column=0, sticky="w", padx=6, pady=6)
+            self._desenhar_painel([])
+            self._mostrar_estado_vazio_painel(
+                "Nenhum contrato processado ainda — vá em 'Carregar Contratos' "
+                "para começar."
+            )
             return
         indices = ["(todos)", *self._c.relatorio.indices_disponiveis()]
         self._opt_indice.configure(values=indices)
@@ -473,92 +534,113 @@ class MainWindow(ctk.CTk):
             f"(indice={indice!r}, busca={texto_busca!r}, auto={auto!r})"
         )
         self._desenhar_painel(linhas)
+        if not linhas:
+            self._mostrar_estado_vazio_painel("Nenhum contrato encontrado com esse filtro.")
+        else:
+            self._esconder_estado_vazio_painel()
 
     def _desenhar_painel(self, linhas: list[LinhaPainel]) -> None:
-        for w in self._tabela_painel.winfo_children():
-            w.destroy()
-        cabecalhos = [
-            "Locatário", "Locador", "Valor", "IRRF", "Redução IRRF", "Índice",
-            "Próx. Reajuste", "Auto?", "Vencimento", "Revisão", "Ações",
-        ]
-        # Sem grid_columnconfigure(weight=...): as colunas do cabeçalho devem
-        # manter a largura NATURAL do texto. Com weight=1 em todas (tentativa
-        # anterior da Fase 3) o Tkinter comprime colunas proporcionalmente
-        # quando a soma das larguras naturais excede a área visível do
-        # CTkScrollableFrame (sem scroll horizontal) — cabeçalhos e células
-        # ficavam cortados/sobrepostos. Ver plano de correção do bug.
-        for col, texto in enumerate(cabecalhos):
-            ctk.CTkLabel(
-                self._tabela_painel, text=texto, font=ctk.CTkFont(weight="bold")
-            ).grid(row=0, column=col, sticky="w", padx=6, pady=4)
+        self._esconder_tooltip_painel()
+        tree = self._tree_painel
+        tree.delete(*tree.get_children())
+        self._mapa_painel_iid_registro.clear()
+        self._mapa_painel_motivo.clear()
 
-        if not linhas:
-            ctk.CTkLabel(
-                self._tabela_painel,
-                text="Nenhum contrato encontrado com esse filtro.",
-                text_color=_COR_TEXTO_SECUNDARIO,
-            ).grid(row=1, column=0, columnspan=len(cabecalhos), sticky="w", padx=6, pady=6)
-            return
-
-        # Larguras aproximadas por coluna (px) usadas só dentro do frame de
-        # cada linha (pack, ver abaixo). Não pretendem alinhar pixel-a-pixel
-        # com o cabeçalho (grid manual) — este layout nunca foi
-        # pixel-perfect no projeto; o que importa é não haver sobreposição.
-        larguras_col = [190, 190, 90, 90, 100, 70, 110, 60, 100, 90]
-
-        col_revisao = cabecalhos.index("Revisão")
         for i, linha in enumerate(linhas, start=1):
-            # Zebra striping: linhas ímpares (1, 3, ...) em _COR_SUPERFICIE,
-            # pares em _COR_SUPERFICIE_ALT — legibilidade em tabelas longas.
-            # Implementado como um CTkFrame por linha (não weight nas
-            # colunas do grid principal) para não comprimir a largura
-            # natural das colunas do cabeçalho — ver nota acima.
-            cor_linha = _COR_SUPERFICIE if i % 2 == 1 else _COR_SUPERFICIE_ALT
-            # Destaque de revisão: ícone + texto + cor (nunca cor isolada).
+            # iid = registro_id quando disponível (usado por
+            # _on_excluir_selecionados); sintético quando None, para não
+            # colidir e ainda assim manter a linha selecionável/exibível.
+            iid = linha.registro_id if linha.registro_id is not None else f"_linha{i}"
+            if linha.registro_id is not None:
+                self._mapa_painel_iid_registro[iid] = linha.registro_id
+            if linha.motivo_revisao:
+                self._mapa_painel_motivo[iid] = linha.motivo_revisao
+
+            # Zebra striping via tag; "revisao" some depois para sobrepor a
+            # cor do texto (foreground) sem mexer no background da zebra.
+            tag_zebra = "impar" if i % 2 == 1 else "par"
+            tags = [tag_zebra, "revisao"] if linha.revisao else [tag_zebra]
+
             revisao_txt = "⚠ revisar" if linha.revisao else "ok"
-            cor = _COR_REVISAO if linha.revisao else None
-            celulas = [
+            valores = [
                 linha.locatario, linha.locador, linha.valor, linha.irrf, linha.reducao_irrf,
                 linha.indice, linha.proximo_reajuste, linha.automatico, linha.vencimento,
                 revisao_txt,
             ]
-            linha_frame = ctk.CTkFrame(
-                self._tabela_painel, fg_color=cor_linha, corner_radius=0
-            )
-            linha_frame.grid(
-                row=i, column=0, columnspan=len(cabecalhos), sticky="ew", padx=0, pady=1
-            )
-            for col, valor in enumerate(celulas):
-                label = ctk.CTkLabel(
-                    linha_frame,
-                    text=valor,
-                    anchor="w",
-                    text_color=cor,
-                    fg_color="transparent",
-                    width=larguras_col[col],
-                )
-                label.pack(side="left", padx=6, pady=4)
-                if col == col_revisao:
-                    # Tooltip explica o motivo específico da linha (§Fase 5) —
-                    # só liga o hover quando há motivo (texto vazio = sem-op).
-                    _Tooltip(label, linha.motivo_revisao)
-            if linha.registro_id is not None:
-                ctk.CTkButton(
-                    linha_frame,
-                    text="Excluir",
-                    fg_color=_COR_ERRO,
-                    width=70,
-                    command=lambda rid=linha.registro_id: self._on_excluir_contrato(rid),
-                ).pack(side="left", padx=6, pady=2)
+            tree.insert("", "end", iid=iid, values=valores, tags=tags)
 
-    def _on_excluir_contrato(self, registro_id: str) -> None:
-        if not messagebox.askyesno(
-            "Excluir contrato",
-            "Excluir este contrato do histórico? Esta ação não pode ser desfeita.",
-        ):
+    def _on_motion_painel(self, event: tk.Event) -> None:
+        tree = self._tree_painel
+        row_iid = tree.identify_row(event.y)
+        col_id = tree.identify_column(event.x)
+        motivo = (
+            self._mapa_painel_motivo.get(row_iid)
+            if row_iid and col_id == self._col_revisao_id
+            else None
+        )
+        chave = (row_iid, col_id) if motivo else None
+        if chave == self._tooltip_painel_chave:
+            return
+        self._esconder_tooltip_painel()
+        self._tooltip_painel_chave = chave
+        if not motivo:
+            return
+        x = tree.winfo_rootx() + event.x + 12
+        y = tree.winfo_rooty() + event.y + 16
+        self._tooltip_painel = tk.Toplevel(tree)
+        self._tooltip_painel.wm_overrideredirect(True)
+        self._tooltip_painel.wm_geometry(f"+{x}+{y}")
+        tk.Label(
+            self._tooltip_painel,
+            text=motivo,
+            background="#313033",
+            foreground="#FFFFFF",
+            relief="solid",
+            borderwidth=1,
+            justify="left",
+            wraplength=360,
+            padx=6,
+            pady=4,
+        ).pack()
+
+    def _esconder_tooltip_painel(self, event: object = None) -> None:
+        if self._tooltip_painel is not None:
+            self._tooltip_painel.destroy()
+            self._tooltip_painel = None
+        self._tooltip_painel_chave = None
+
+    def _on_excluir_selecionados(self) -> None:
+        selecionados = self._tree_painel.selection()
+        if not selecionados:
+            messagebox.showinfo("Excluir selecionado", "Selecione um contrato para excluir.")
+            return
+        registro_ids = [
+            self._mapa_painel_iid_registro[iid]
+            for iid in selecionados
+            if iid in self._mapa_painel_iid_registro
+        ]
+        if not registro_ids:
+            messagebox.showinfo(
+                "Excluir selecionado", "Nenhum dos itens selecionados pode ser excluído."
+            )
+            return
+        self._on_excluir_contrato(registro_ids)
+
+    def _on_excluir_contrato(self, registro_id: str | list[str]) -> None:
+        ids = [registro_id] if isinstance(registro_id, str) else list(registro_id)
+        pergunta = (
+            "Excluir este contrato do histórico? Esta ação não pode ser desfeita."
+            if len(ids) == 1
+            else (
+                f"Excluir {len(ids)} contratos selecionados do histórico? "
+                "Esta ação não pode ser desfeita."
+            )
+        )
+        if not messagebox.askyesno("Excluir contrato", pergunta):
             return
         try:
-            self._c.relatorio.excluir_contrato(registro_id)
+            for rid in ids:
+                self._c.relatorio.excluir_contrato(rid)
         except ControllerError as exc:
             messagebox.showerror("Excluir contrato", str(exc))
             return

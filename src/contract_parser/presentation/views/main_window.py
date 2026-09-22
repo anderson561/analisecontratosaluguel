@@ -218,6 +218,17 @@ class MainWindow(ctk.CTk):
             ).grid(row=0, column=0, sticky="w", padx=6, pady=6)
             return
 
+        if not linhas:
+            ctk.CTkLabel(
+                self._tabela_empresas,
+                text=(
+                    "Nenhuma empresa cadastrada ainda — importe uma planilha "
+                    "ou cadastre manualmente."
+                ),
+                text_color=_COR_TEXTO_SECUNDARIO,
+            ).grid(row=0, column=0, sticky="w", padx=6, pady=6)
+            return
+
         cabecalhos = ["CNPJ", "Razão Social", "Ativo", "Origem"]
         for col, texto in enumerate(cabecalhos):
             ctk.CTkLabel(
@@ -328,6 +339,11 @@ class MainWindow(ctk.CTk):
             text_color=_COR_TEXTO_SECUNDARIO,
         ).pack(fill="x", padx=12, pady=(0, 4))
 
+        self._barra_progresso = ctk.CTkProgressBar(
+            self._tab_processamento, mode="indeterminate"
+        )
+        # Não empacotada ainda: só aparece durante _processar_e_exibir.
+
         self._log_proc = ctk.CTkTextbox(self._tab_processamento)
         self._log_proc.pack(fill="both", expand=True, padx=8, pady=8)
 
@@ -351,12 +367,18 @@ class MainWindow(ctk.CTk):
     def _processar_e_exibir(
         self, chamada: Callable[[], ProcessamentoResultado], origem: str
     ) -> None:
+        self._barra_progresso.pack(fill="x", padx=8, pady=(0, 8))
+        self._barra_progresso.start()
+        self.update_idletasks()
         try:
             resultado = chamada()
         except ControllerError as exc:
             messagebox.showerror("Carregar Contratos", str(exc))
             self._atualizar_status()
             return
+        finally:
+            self._barra_progresso.stop()
+            self._barra_progresso.pack_forget()
         self._lbl_proc.configure(
             text=(
                 f"Arquivos: {resultado.total_arquivos}  ·  Processados: {resultado.processados}"
@@ -424,6 +446,16 @@ class MainWindow(ctk.CTk):
     def _recarregar_painel(self) -> None:
         if not self._c.relatorio.tem_dados():
             registrar_evento("Painel: tem_dados()=False, sem histórico para desenhar")
+            for w in self._tabela_painel.winfo_children():
+                w.destroy()
+            ctk.CTkLabel(
+                self._tabela_painel,
+                text=(
+                    "Nenhum contrato processado ainda — vá em 'Carregar Contratos' "
+                    "para começar."
+                ),
+                text_color=_COR_TEXTO_SECUNDARIO,
+            ).grid(row=0, column=0, sticky="w", padx=6, pady=6)
             return
         indices = ["(todos)", *self._c.relatorio.indices_disponiveis()]
         self._opt_indice.configure(values=indices)
@@ -449,12 +481,39 @@ class MainWindow(ctk.CTk):
             "Locatário", "Locador", "Valor", "IRRF", "Redução IRRF", "Índice",
             "Próx. Reajuste", "Auto?", "Vencimento", "Revisão", "Ações",
         ]
+        # Sem grid_columnconfigure(weight=...): as colunas do cabeçalho devem
+        # manter a largura NATURAL do texto. Com weight=1 em todas (tentativa
+        # anterior da Fase 3) o Tkinter comprime colunas proporcionalmente
+        # quando a soma das larguras naturais excede a área visível do
+        # CTkScrollableFrame (sem scroll horizontal) — cabeçalhos e células
+        # ficavam cortados/sobrepostos. Ver plano de correção do bug.
         for col, texto in enumerate(cabecalhos):
             ctk.CTkLabel(
                 self._tabela_painel, text=texto, font=ctk.CTkFont(weight="bold")
             ).grid(row=0, column=col, sticky="w", padx=6, pady=4)
+
+        if not linhas:
+            ctk.CTkLabel(
+                self._tabela_painel,
+                text="Nenhum contrato encontrado com esse filtro.",
+                text_color=_COR_TEXTO_SECUNDARIO,
+            ).grid(row=1, column=0, columnspan=len(cabecalhos), sticky="w", padx=6, pady=6)
+            return
+
+        # Larguras aproximadas por coluna (px) usadas só dentro do frame de
+        # cada linha (pack, ver abaixo). Não pretendem alinhar pixel-a-pixel
+        # com o cabeçalho (grid manual) — este layout nunca foi
+        # pixel-perfect no projeto; o que importa é não haver sobreposição.
+        larguras_col = [190, 190, 90, 90, 100, 70, 110, 60, 100, 90]
+
         col_revisao = cabecalhos.index("Revisão")
         for i, linha in enumerate(linhas, start=1):
+            # Zebra striping: linhas ímpares (1, 3, ...) em _COR_SUPERFICIE,
+            # pares em _COR_SUPERFICIE_ALT — legibilidade em tabelas longas.
+            # Implementado como um CTkFrame por linha (não weight nas
+            # colunas do grid principal) para não comprimir a largura
+            # natural das colunas do cabeçalho — ver nota acima.
+            cor_linha = _COR_SUPERFICIE if i % 2 == 1 else _COR_SUPERFICIE_ALT
             # Destaque de revisão: ícone + texto + cor (nunca cor isolada).
             revisao_txt = "⚠ revisar" if linha.revisao else "ok"
             cor = _COR_REVISAO if linha.revisao else None
@@ -463,23 +522,34 @@ class MainWindow(ctk.CTk):
                 linha.indice, linha.proximo_reajuste, linha.automatico, linha.vencimento,
                 revisao_txt,
             ]
+            linha_frame = ctk.CTkFrame(
+                self._tabela_painel, fg_color=cor_linha, corner_radius=0
+            )
+            linha_frame.grid(
+                row=i, column=0, columnspan=len(cabecalhos), sticky="ew", padx=0, pady=1
+            )
             for col, valor in enumerate(celulas):
                 label = ctk.CTkLabel(
-                    self._tabela_painel, text=valor, anchor="w", text_color=cor
+                    linha_frame,
+                    text=valor,
+                    anchor="w",
+                    text_color=cor,
+                    fg_color="transparent",
+                    width=larguras_col[col],
                 )
-                label.grid(row=i, column=col, sticky="w", padx=6, pady=2)
+                label.pack(side="left", padx=6, pady=4)
                 if col == col_revisao:
                     # Tooltip explica o motivo específico da linha (§Fase 5) —
                     # só liga o hover quando há motivo (texto vazio = sem-op).
                     _Tooltip(label, linha.motivo_revisao)
             if linha.registro_id is not None:
                 ctk.CTkButton(
-                    self._tabela_painel,
+                    linha_frame,
                     text="Excluir",
                     fg_color=_COR_ERRO,
                     width=70,
                     command=lambda rid=linha.registro_id: self._on_excluir_contrato(rid),
-                ).grid(row=i, column=len(cabecalhos) - 1, sticky="w", padx=6, pady=2)
+                ).pack(side="left", padx=6, pady=2)
 
     def _on_excluir_contrato(self, registro_id: str) -> None:
         if not messagebox.askyesno(

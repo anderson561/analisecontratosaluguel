@@ -10,14 +10,21 @@ from contract_parser.application.empresa_importer import (
     ArquivoImportacaoError,
     EmpresaImporter,
     detectar_colunas,
+    detectar_linha_header,
+    inspecionar,
+    listar_abas,
 )
 from tests.support.fakes import FakeEmpresaRepository
 from tests.support.fixture_builders import (
     cnpj_valido_sequencial,
     construir_ods_50_empresas,
+    construir_ods_celula_conteudo_repetida_acima_do_limite,
     construir_ods_com_cauda_vazia_gigante,
     construir_ods_com_linhas_e_celulas_repetidas,
+    construir_ods_com_multiplos_blocos_vazios_no_fim,
     construir_ods_header_sujo,
+    construir_ods_multiplas_abas,
+    construir_ods_titulo_antes_do_header,
     construir_xlsx_50_empresas,
     construir_xlsx_header_sujo,
     construir_xlsx_sem_header_cnpj,
@@ -212,6 +219,118 @@ def test_importar_ods_cauda_vazia_gigante_nao_materializa_grade_inteira(importer
     assert por_cnpj[cnpj_valido_sequencial(201)] == "Empresa Um LTDA"
     assert por_cnpj[cnpj_valido_sequencial(202)] == "Empresa Dois LTDA"
     assert por_cnpj[cnpj_valido_sequencial(203)] == "Empresa Tres LTDA"
+
+
+def test_importar_ods_multiplos_blocos_vazios_no_fim_nao_materializa(importer, tmp_path):
+    """Variante do bug real: VÁRIOS blocos SEPARADOS de linha vazia perto do
+    fim (não um só bloco final) — o código antigo só tratava o último
+    elemento XML como cauda vazia, então os blocos anteriores a ele eram
+    expandidos literalmente."""
+    caminho = construir_ods_com_multiplos_blocos_vazios_no_fim(tmp_path / "multi_bloco.ods")
+
+    inicio = time.perf_counter()
+    resumo = importer.importar(caminho)
+    duracao = time.perf_counter() - inicio
+
+    assert duracao < 5, f"importação demorou {duracao:.1f}s — algum bloco vazio foi materializado"
+    assert resumo.importados == 3
+    assert resumo.total_erros == 0
+    assert resumo.total_linhas <= 4
+    por_cnpj = {e.cnpj: e.razao_social for e in importer._repo.list_all()}
+    assert por_cnpj[cnpj_valido_sequencial(301)] == "Empresa Um LTDA"
+    assert por_cnpj[cnpj_valido_sequencial(302)] == "Empresa Dois LTDA"
+    assert por_cnpj[cnpj_valido_sequencial(303)] == "Empresa Tres LTDA"
+
+    # A inspeção (listar_abas/inspecionar) também não pode refletir a
+    # contagem bruta dos blocos vazios (200 + 5_000 + 50_000 = 55_200 linhas
+    # fantasmas) — só as 4 linhas reais (header + 3 empresas).
+    abas = listar_abas(caminho)
+    assert len(abas) == 1
+    assert abas[0].n_linhas_uteis == 4
+
+    info = inspecionar(caminho)
+    assert info.aba_sugerida == 0
+    assert info.linha_header_sugerida == 0
+    assert info.total_linhas_estimado == 3
+
+
+def test_importar_ods_celula_conteudo_repetido_acima_do_teto_levanta(importer, tmp_path):
+    """Teto de sanidade (item 2): uma célula com CONTEÚDO REAL repetida de
+    forma anormal (``number-columns-repeated`` acima do limite) deve levantar
+    erro em vez de truncar/duplicar silenciosamente um dado real — isso é
+    defesa contra ODS malformado/adversarial, diferente da cauda vazia."""
+    caminho = construir_ods_celula_conteudo_repetida_acima_do_limite(tmp_path / "repetida.ods")
+    with pytest.raises(ArquivoImportacaoError):
+        importer.importar(caminho)
+
+
+# --------------------------------------------------------------------------- #
+# detectar_linha_header / listar_abas / inspecionar (superfície nova, ainda
+# sem uso em ``EmpresaImporter.importar()`` — ligada em fase futura).
+# --------------------------------------------------------------------------- #
+def test_detectar_linha_header_sem_titulo_assume_linha_0():
+    linhas = [["CNPJ", "Razão Social"], ["11222333000181", "Alpha"]]
+    assert detectar_linha_header(linhas) == 0
+
+
+def test_detectar_linha_header_nenhuma_linha_pontua_assume_linha_0():
+    linhas = [["a", "b"], ["c", "d"]]
+    assert detectar_linha_header(linhas) == 0
+
+
+def test_detectar_linha_header_pula_titulo_mesclado():
+    linhas = [
+        ["MAPA DE ALUGUÉIS PESSOA FÍSICA 2024", None, None],
+        ["CNPJ", "Razão Social"],
+        ["11222333000181", "Alpha"],
+    ]
+    assert detectar_linha_header(linhas) == 1
+
+
+def test_importar_ods_titulo_antes_do_header_inspecionar_acha_header_real(importer, tmp_path):
+    caminho = construir_ods_titulo_antes_do_header(tmp_path / "titulo.ods")
+
+    info = inspecionar(caminho)
+
+    assert info.linha_header_sugerida == 1
+    assert info.mapa_sugerido is not None
+    assert info.mapa_sugerido.idx_cnpj == 0
+    assert info.mapa_sugerido.idx_razao == 1
+    assert info.total_linhas_estimado == 2
+
+
+def test_listar_abas_ods_multiplas_abas(tmp_path):
+    caminho = construir_ods_multiplas_abas(tmp_path / "multi_aba.ods")
+
+    abas = listar_abas(caminho)
+
+    assert [a.nome for a in abas] == ["Pessoa Fisica", "Pessoa Juridica"]
+    assert [a.indice for a in abas] == [0, 1]
+    assert abas[0].n_linhas_uteis == 3  # header + 2 empresas
+    assert abas[1].n_linhas_uteis == 2  # header + 1 empresa
+
+
+def test_listar_abas_xlsx_retorna_uma_unica_aba(tmp_path):
+    caminho = construir_xlsx_50_empresas(tmp_path / "portfolio50.xlsx")
+
+    abas = listar_abas(caminho)
+
+    assert len(abas) == 1
+    assert abas[0].indice == 0
+    assert abas[0].n_linhas_uteis == 51  # header + 50 empresas
+
+
+def test_inspecionar_sugere_aba_com_mais_linhas_uteis(tmp_path):
+    caminho = construir_ods_multiplas_abas(tmp_path / "multi_aba.ods")
+
+    info = inspecionar(caminho)
+
+    assert info.aba_sugerida == 0  # "Pessoa Fisica" tem mais linhas úteis (3 > 2)
+    assert len(info.abas) == 2
+    assert info.linha_header_sugerida == 0
+    assert info.mapa_sugerido is not None
+    assert info.mapa_sugerido.idx_cnpj == 0
+    assert info.mapa_sugerido.idx_razao == 1
 
 
 def test_importar_ods_corrompido_levanta(importer, tmp_path):

@@ -199,3 +199,138 @@ def construir_ods_com_cauda_vazia_gigante(caminho: Path) -> Path:
     doc.spreadsheet.addElement(tabela)
     doc.save(str(caminho))
     return caminho
+
+
+def construir_ods_com_multiplos_blocos_vazios_no_fim(caminho: Path) -> Path:
+    """.ods com VÁRIOS blocos SEPARADOS de linhas vazias no fim (não um só).
+
+    Reproduz o bug real (não coberto por ``construir_ods_com_cauda_vazia_gigante``):
+    um .ods legítimo do LibreOffice Calc pode ter vários ``TableRow`` distintos
+    perto do fim da tabela, cada um com seu próprio ``number-rows-repeated``,
+    em vez de um único bloco final. O código antigo só tratava o ÚLTIMO
+    elemento XML como cauda vazia especial — os blocos anteriores a ele eram
+    expandidos literalmente, materializando dezenas de milhares de linhas
+    fantasmas (no arquivo real do usuário, ~1.048.300 linhas vindas de 5
+    blocos que não eram "o último elemento")."""
+    doc = OpenDocumentSpreadsheet()
+    tabela = Table(name="Planilha1")
+
+    def _linha(valores: list[object]) -> TableRow:
+        row = TableRow()
+        for v in valores:
+            row.addElement(_celula_ods(v))
+        return row
+
+    cnpj1 = cnpj_valido_sequencial(301)
+    cnpj2 = cnpj_valido_sequencial(302)
+    cnpj3 = cnpj_valido_sequencial(303)
+
+    tabela.addElement(_linha(["CNPJ", "Razão Social"]))
+    tabela.addElement(_linha([cnpj1, "Empresa Um LTDA"]))
+    tabela.addElement(_linha([cnpj2, "Empresa Dois LTDA"]))
+    tabela.addElement(_linha([cnpj3, "Empresa Tres LTDA"]))
+
+    # 3 blocos SEPARADOS de linha vazia, tamanhos bem diferentes — só o
+    # último tem chance de ser tratado pela regra antiga ("é o último
+    # elemento XML"); os dois primeiros, não.
+    for tamanho in (200, 5_000, 50_000):
+        bloco_vazio = TableRow(numberrowsrepeated=tamanho)
+        bloco_vazio.addElement(_celula_ods())
+        tabela.addElement(bloco_vazio)
+
+    doc.spreadsheet.addElement(tabela)
+    doc.save(str(caminho))
+    return caminho
+
+
+def construir_ods_titulo_antes_do_header(caminho: Path) -> Path:
+    """.ods com linha de título mesclado ANTES do header de verdade.
+
+    Linha 0: célula única não vazia (título), resto ``None`` — como um
+    LibreOffice Calc real grava uma célula mesclada. Linha 1: header de
+    verdade (CNPJ/Razão Social). Linhas seguintes: dados reais. Sem
+    ``detectar_linha_header``, a linha 0 seria tratada como header e a linha
+    1 (o header de verdade) viraria "linha de dado", gerando um erro espúrio
+    de CNPJ inválido (o texto "CNPJ" não vira 14 dígitos)."""
+    doc = OpenDocumentSpreadsheet()
+    tabela = Table(name="Planilha1")
+
+    def _linha(valores: list[object]) -> TableRow:
+        row = TableRow()
+        for v in valores:
+            row.addElement(_celula_ods(v))
+        return row
+
+    cnpj1 = cnpj_valido_sequencial(401)
+    cnpj2 = cnpj_valido_sequencial(402)
+
+    tabela.addElement(
+        _linha(["MAPA DE ALUGUÉIS PESSOA FÍSICA 2024", None, None, None])
+    )
+    tabela.addElement(_linha(["CNPJ", "Razão Social"]))
+    tabela.addElement(_linha([cnpj1, "Empresa Um LTDA"]))
+    tabela.addElement(_linha([cnpj2, "Empresa Dois LTDA"]))
+
+    doc.spreadsheet.addElement(tabela)
+    doc.save(str(caminho))
+    return caminho
+
+
+def construir_ods_multiplas_abas(caminho: Path) -> Path:
+    """.ods com 2 abas (``Table``) nomeadas, cada uma com dados reais distintos.
+
+    Exercita ``listar_abas``: uma ``AbaInfo`` por aba, com nome e contagem de
+    linhas úteis corretos."""
+    doc = OpenDocumentSpreadsheet()
+
+    def _linha(valores: list[object]) -> TableRow:
+        row = TableRow()
+        for v in valores:
+            row.addElement(_celula_ods(v))
+        return row
+
+    aba1 = Table(name="Pessoa Fisica")
+    aba1.addElement(_linha(["CNPJ", "Razão Social"]))
+    aba1.addElement(_linha([cnpj_valido_sequencial(501), "Empresa Aba1 Um LTDA"]))
+    aba1.addElement(_linha([cnpj_valido_sequencial(502), "Empresa Aba1 Dois LTDA"]))
+
+    aba2 = Table(name="Pessoa Juridica")
+    aba2.addElement(_linha(["CNPJ", "Razão Social"]))
+    aba2.addElement(_linha([cnpj_valido_sequencial(503), "Empresa Aba2 Um LTDA"]))
+
+    doc.spreadsheet.addElement(aba1)
+    doc.spreadsheet.addElement(aba2)
+    doc.save(str(caminho))
+    return caminho
+
+
+def construir_ods_celula_conteudo_repetida_acima_do_limite(
+    caminho: Path, repeticoes: int = 6_000
+) -> Path:
+    """.ods com uma célula de CONTEÚDO REAL (não vazia) repetida acima do teto
+    de sanidade (``_MAX_REPETICOES_RAZOAVEL``) — defesa em profundidade contra
+    ODS malformado/adversarial: deve levantar ``ArquivoImportacaoError`` em
+    vez de truncar silenciosamente um dado real sem avisar."""
+    doc = OpenDocumentSpreadsheet()
+    tabela = Table(name="Planilha1")
+
+    tabela.addElement(_linha_simples(["CNPJ", "Razão Social"]))
+
+    row = TableRow()
+    row.addElement(_celula_ods(cnpj_valido_sequencial(601)))
+    celula_repetida = TableCell(numbercolumnsrepeated=repeticoes)
+    celula_repetida.addElement(P(text="Empresa Repetida LTDA"))
+    row.addElement(celula_repetida)
+    tabela.addElement(row)
+
+    doc.spreadsheet.addElement(tabela)
+    doc.save(str(caminho))
+    return caminho
+
+
+def _linha_simples(valores: list[object]) -> TableRow:
+    """Helper interno: uma ``TableRow`` comum (sem repetição), célula a célula."""
+    row = TableRow()
+    for v in valores:
+        row.addElement(_celula_ods(v))
+    return row

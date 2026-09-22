@@ -133,8 +133,10 @@ class MainWindow(ctk.CTk):
     # Banner de status (conexão com o banco de dados SQLite)
     # ------------------------------------------------------------------ #
     def _construir_banner_status(self) -> None:
-        self._banner = ctk.CTkLabel(self, text="", anchor="w", height=32)
-        self._banner.pack(fill="x", padx=12, pady=8)
+        moldura = ctk.CTkFrame(self, fg_color=_COR_SUPERFICIE, corner_radius=8)
+        moldura.pack(fill="x", padx=12, pady=8)
+        self._banner = ctk.CTkLabel(moldura, text="", anchor="w", height=32)
+        self._banner.pack(fill="x", padx=16, pady=12)
 
     def _atualizar_status(self) -> None:
         status = self._c.status_conexao()
@@ -162,23 +164,42 @@ class MainWindow(ctk.CTk):
 
         form = ctk.CTkFrame(self._tab_empresas)
         form.pack(fill="x", padx=8, pady=4)
-        self._ent_cnpj = ctk.CTkEntry(form, placeholder_text="CNPJ", width=180)
-        self._ent_cnpj.pack(side="left", padx=4)
-        self._ent_razao = ctk.CTkEntry(form, placeholder_text="Razão Social", width=320)
-        self._ent_razao.pack(side="left", padx=4)
+
+        campo_cnpj = ctk.CTkFrame(form, fg_color="transparent")
+        campo_cnpj.pack(side="left", padx=4, pady=4)
+        ctk.CTkLabel(
+            campo_cnpj, text="CNPJ", anchor="w", text_color=_COR_TEXTO_SECUNDARIO
+        ).pack(anchor="w")
+        self._ent_cnpj = ctk.CTkEntry(campo_cnpj, placeholder_text="CNPJ", width=180)
+        self._ent_cnpj.pack(anchor="w")
+
+        campo_razao = ctk.CTkFrame(form, fg_color="transparent")
+        campo_razao.pack(side="left", padx=4, pady=4)
+        ctk.CTkLabel(
+            campo_razao, text="Razão Social", anchor="w", text_color=_COR_TEXTO_SECUNDARIO
+        ).pack(anchor="w")
+        self._ent_razao = ctk.CTkEntry(campo_razao, placeholder_text="Razão Social", width=320)
+        self._ent_razao.pack(anchor="w")
+
+        grupo_edicao = ctk.CTkFrame(form, fg_color="transparent")
+        grupo_edicao.pack(side="left", padx=(8, 0), pady=4, anchor="s")
         ctk.CTkButton(
-            form,
+            grupo_edicao,
             text="Adicionar",
             fg_color=_COR_PRIMARIA,
             hover_color=_COR_PRIMARIA_HOVER,
             command=self._on_adicionar,
         ).pack(side="left", padx=4)
         ctk.CTkButton(
-            form, text="Salvar edição", fg_color=_COR_SECUNDARIA, command=self._on_editar
+            grupo_edicao, text="Salvar edição", fg_color=_COR_SECUNDARIA, command=self._on_editar
         ).pack(side="left", padx=4)
+
+        divisor = ctk.CTkFrame(form, width=1, fg_color=_COR_BORDA)
+        divisor.pack(side="left", fill="y", padx=20, pady=6)
+
         ctk.CTkButton(
             form, text="Remover", fg_color=_COR_ERRO, command=self._on_remover
-        ).pack(side="left", padx=4)
+        ).pack(side="left", padx=4, pady=4, anchor="s")
 
         self._tabela_empresas = ctk.CTkScrollableFrame(
             self._tab_empresas, label_text="Portfólio cadastrado", fg_color=_COR_SUPERFICIE
@@ -299,6 +320,14 @@ class MainWindow(ctk.CTk):
         self._lbl_proc = ctk.CTkLabel(topo, text="Nenhuma pasta processada.", anchor="w")
         self._lbl_proc.pack(side="left", padx=12)
 
+        ctk.CTkLabel(
+            self._tab_processamento,
+            text="Processe uma pasta inteira ou escolha arquivos avulsos.",
+            anchor="w",
+            font=ctk.CTkFont(size=11),
+            text_color=_COR_TEXTO_SECUNDARIO,
+        ).pack(fill="x", padx=12, pady=(0, 4))
+
         self._log_proc = ctk.CTkTextbox(self._tab_processamento)
         self._log_proc.pack(fill="both", expand=True, padx=8, pady=8)
 
@@ -348,31 +377,36 @@ class MainWindow(ctk.CTk):
     # Aba Painel de Contratos (Relatório 01)
     # ------------------------------------------------------------------ #
     def _construir_aba_painel(self) -> None:
-        filtros = ctk.CTkFrame(self._tab_painel)
-        filtros.pack(fill="x", padx=8, pady=8)
+        linha_filtros = ctk.CTkFrame(self._tab_painel)
+        linha_filtros.pack(fill="x", padx=8, pady=(8, 4))
 
-        ctk.CTkLabel(filtros, text="Índice:").pack(side="left", padx=(4, 2))
-        self._opt_indice = ctk.CTkOptionMenu(filtros, values=["(todos)"])
+        ctk.CTkLabel(linha_filtros, text="Índice:").pack(side="left", padx=(4, 2))
+        self._opt_indice = ctk.CTkOptionMenu(linha_filtros, values=["(todos)"])
         self._opt_indice.pack(side="left", padx=4)
 
-        self._chk_auto = ctk.CTkCheckBox(filtros, text="Só reajuste automático")
+        self._chk_auto = ctk.CTkCheckBox(linha_filtros, text="Só reajuste automático")
         self._chk_auto.pack(side="left", padx=8)
 
-        self._ent_busca = ctk.CTkEntry(filtros, placeholder_text="Buscar (locatário/locador)…", width=280)
+        self._ent_busca = ctk.CTkEntry(
+            linha_filtros, placeholder_text="Buscar (locatário/locador)…", width=280
+        )
         self._ent_busca.pack(side="left", padx=4)
+
+        linha_acoes = ctk.CTkFrame(self._tab_painel)
+        linha_acoes.pack(fill="x", padx=8, pady=(0, 8))
         ctk.CTkButton(
-            filtros,
+            linha_acoes,
             text="Filtrar",
             fg_color=_COR_PRIMARIA,
             hover_color=_COR_PRIMARIA_HOVER,
             command=self._recarregar_painel,
         ).pack(side="left", padx=4)
         ctk.CTkButton(
-            filtros, text="Limpar", fg_color=_COR_SECUNDARIA, command=self._limpar_filtros
+            linha_acoes, text="Limpar", fg_color=_COR_SECUNDARIA, command=self._limpar_filtros
         ).pack(side="left", padx=4)
         ctk.CTkButton(
-            filtros, text="Limpar tudo", fg_color=_COR_ERRO, command=self._on_limpar_tudo
-        ).pack(side="left", padx=4)
+            linha_acoes, text="Limpar tudo", fg_color=_COR_ERRO, command=self._on_limpar_tudo
+        ).pack(side="right", padx=(24, 4))
 
         self._tabela_painel = ctk.CTkScrollableFrame(
             self._tab_painel,
@@ -521,10 +555,20 @@ class MainWindow(ctk.CTk):
             ("Pendências", resumo.total_pendencias),
         ]
         for col, (rotulo, valor) in enumerate(totais):
-            cel = ctk.CTkFrame(self._box_totais)
+            cel = ctk.CTkFrame(
+                self._box_totais,
+                fg_color=_COR_SUPERFICIE,
+                corner_radius=12,
+                border_width=1,
+                border_color=_COR_BORDA,
+            )
             cel.grid(row=0, column=col, padx=8, pady=6, sticky="w")
-            ctk.CTkLabel(cel, text=rotulo).pack()
-            ctk.CTkLabel(cel, text=str(valor), font=ctk.CTkFont(size=20, weight="bold")).pack()
+            ctk.CTkLabel(cel, text=rotulo, text_color=_COR_TEXTO_SECUNDARIO).pack(
+                padx=16, pady=(12, 0)
+            )
+            ctk.CTkLabel(
+                cel, text=str(valor), font=ctk.CTkFont(size=20, weight="bold")
+            ).pack(padx=16, pady=(0, 12))
 
         if resumo.pendencias:
             for i, pendencia in enumerate(resumo.pendencias):

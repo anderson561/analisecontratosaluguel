@@ -138,6 +138,19 @@ class MainWindow(ctk.CTk):
     # ------------------------------------------------------------------ #
     # Aba Empresas
     # ------------------------------------------------------------------ #
+    # Colunas de dados do Treeview de Empresas — mesma técnica da Fase 2
+    # (_COLS_PAINEL): uma única fonte de verdade para heading e coluna, com
+    # larguras medidas via tkinter.font.Font(...).measure() (fonte real do
+    # heading, "Segoe UI" 10 bold) sobre o cabeçalho e uma amostra de
+    # conteúdo típico. "Razão Social" e "Origem" recebem folga generosa —
+    # nomes de empresa e de arquivo de planilha tendem a ser longos.
+    _COLS_EMPRESAS: tuple[tuple[str, str, int], ...] = (
+        ("cnpj", "CNPJ", 150),
+        ("razao_social", "Razão Social", 320),
+        ("ativo", "Ativo", 70),
+        ("origem", "Origem", 320),
+    )
+
     def _construir_aba_empresas(self) -> None:
         topo = ctk.CTkFrame(self._tab_empresas)
         topo.pack(fill="x", padx=8, pady=8)
@@ -184,53 +197,92 @@ class MainWindow(ctk.CTk):
             grupo_edicao, text="Salvar edição", fg_color=_COR_SECUNDARIA, command=self._on_editar
         ).pack(side="left", padx=4)
 
-        divisor = ctk.CTkFrame(form, width=1, fg_color=_COR_BORDA)
+        divisor = ctk.CTkFrame(form, width=1, height=1, fg_color=_COR_BORDA)
         divisor.pack(side="left", fill="y", padx=20, pady=6)
 
         ctk.CTkButton(
             form, text="Remover", fg_color=_COR_ERRO, command=self._on_remover
         ).pack(side="left", padx=4, pady=4, anchor="s")
 
-        self._tabela_empresas = ctk.CTkScrollableFrame(
-            self._tab_empresas, label_text="Portfólio cadastrado", fg_color=_COR_SUPERFICIE
+        container = ctk.CTkFrame(self._tab_empresas, fg_color="transparent")
+        container.pack(fill="both", expand=True, padx=8, pady=8)
+
+        ctk.CTkLabel(
+            container,
+            text="Portfólio cadastrado",
+            font=ctk.CTkFont(weight="bold"),
+            anchor="w",
+        ).pack(fill="x", pady=(0, 6))
+
+        tabela_frame = ctk.CTkFrame(container, fg_color=_COR_SUPERFICIE)
+        tabela_frame.pack(fill="both", expand=True)
+
+        colunas = [col_id for col_id, _texto, _largura in self._COLS_EMPRESAS]
+        self._tree_empresas = ttk.Treeview(tabela_frame, columns=colunas, show="headings")
+        for col_id, texto, largura in self._COLS_EMPRESAS:
+            self._tree_empresas.heading(col_id, text=texto)
+            self._tree_empresas.column(col_id, width=largura, anchor="w")
+        self._tree_empresas.tag_configure("par", background=_COR_SUPERFICIE_ALT)
+        self._tree_empresas.tag_configure("impar", background=_COR_SUPERFICIE)
+
+        scrollbar = ttk.Scrollbar(
+            tabela_frame, orient="vertical", command=self._tree_empresas.yview
         )
-        self._tabela_empresas.pack(fill="both", expand=True, padx=8, pady=8)
+        scrollbar_h = ttk.Scrollbar(
+            tabela_frame, orient="horizontal", command=self._tree_empresas.xview
+        )
+        self._tree_empresas.configure(
+            yscrollcommand=scrollbar.set, xscrollcommand=scrollbar_h.set
+        )
+        tabela_frame.grid_rowconfigure(0, weight=1)
+        tabela_frame.grid_columnconfigure(0, weight=1)
+        self._tree_empresas.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        scrollbar_h.grid(row=1, column=0, sticky="ew")
+
+        self._lbl_empresas_vazio = ctk.CTkLabel(
+            container, text="", text_color=_COR_TEXTO_SECUNDARIO, anchor="w"
+        )
+        # Não empacotado ainda: só aparece quando não há linhas a mostrar
+        # (ver _mostrar_estado_vazio_empresas), evitando flicker de
+        # criar/destruir o widget a cada recarga (mesmo padrão do Painel).
+
+    def _mostrar_estado_vazio_empresas(
+        self, mensagem: str, cor: str = _COR_TEXTO_SECUNDARIO
+    ) -> None:
+        self._lbl_empresas_vazio.configure(text=mensagem, text_color=cor)
+        self._lbl_empresas_vazio.pack(fill="x", pady=(4, 0))
+
+    def _esconder_estado_vazio_empresas(self) -> None:
+        self._lbl_empresas_vazio.pack_forget()
 
     def _recarregar_empresas(self) -> None:
-        for w in self._tabela_empresas.winfo_children():
-            w.destroy()
+        tree = self._tree_empresas
+        tree.delete(*tree.get_children())
         try:
             linhas = self._c.empresas.linhas_empresas()
         except ControllerError as exc:
             self._atualizar_status()
-            ctk.CTkLabel(
-                self._tabela_empresas, text=str(exc), text_color=_COR_ERRO, wraplength=900
-            ).grid(row=0, column=0, sticky="w", padx=6, pady=6)
+            self._mostrar_estado_vazio_empresas(str(exc), cor=_COR_ERRO)
             return
 
         if not linhas:
-            ctk.CTkLabel(
-                self._tabela_empresas,
-                text=(
-                    "Nenhuma empresa cadastrada ainda — importe uma planilha "
-                    "ou cadastre manualmente."
-                ),
-                text_color=_COR_TEXTO_SECUNDARIO,
-            ).grid(row=0, column=0, sticky="w", padx=6, pady=6)
+            self._mostrar_estado_vazio_empresas(
+                "Nenhuma empresa cadastrada ainda — importe uma planilha "
+                "ou cadastre manualmente."
+            )
             return
 
-        cabecalhos = ["CNPJ", "Razão Social", "Ativo", "Origem"]
-        for col, texto in enumerate(cabecalhos):
-            ctk.CTkLabel(
-                self._tabela_empresas, text=texto, font=ctk.CTkFont(weight="bold")
-            ).grid(row=0, column=col, sticky="w", padx=6, pady=4)
+        self._esconder_estado_vazio_empresas()
         for i, linha in enumerate(linhas, start=1):
-            for col, valor in enumerate(
-                [linha.cnpj, linha.razao_social, linha.ativo, linha.origem]
-            ):
-                ctk.CTkLabel(self._tabela_empresas, text=valor, anchor="w").grid(
-                    row=i, column=col, sticky="w", padx=6, pady=2
-                )
+            tag_zebra = "impar" if i % 2 == 1 else "par"
+            tree.insert(
+                "",
+                "end",
+                iid=linha.cnpj,
+                values=[linha.cnpj, linha.razao_social, linha.ativo, linha.origem],
+                tags=[tag_zebra],
+            )
 
     def _on_importar(self) -> None:
         caminho = filedialog.askopenfilename(

@@ -94,6 +94,20 @@ def test_init_schema_e_idempotente():
         conn.close()
 
 
+def test_init_schema_cria_indice_processado_em():
+    conn = sqlite3.connect(":memory:")
+    try:
+        init_schema(conn)
+
+        cur = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'index' "
+            "AND name = 'idx_contratos_processado_em'"
+        )
+        assert cur.fetchone() is not None
+    finally:
+        conn.close()
+
+
 def test_init_schema_envolve_erro_sqlite_em_repository_error():
     conn = sqlite3.connect(":memory:")
     conn.close()
@@ -144,6 +158,27 @@ def test_get_connection_usa_row_factory():
     conn = get_connection(database_path=":memory:")
     try:
         assert conn.row_factory is sqlite3.Row
+    finally:
+        conn.close()
+
+
+def test_get_connection_aplica_pragma_journal_mode_wal(tmp_path):
+    # ":memory:" nao suporta WAL (sempre reporta "memory"), entao precisa de
+    # um arquivo real para validar o pragma persistido pela conexao.
+    caminho = str(tmp_path / "wal.db")
+    conn = get_connection(database_path=caminho)
+    try:
+        cur = conn.execute("PRAGMA journal_mode")
+        assert cur.fetchone()[0].lower() == "wal"
+    finally:
+        conn.close()
+
+
+def test_get_connection_aplica_pragma_busy_timeout():
+    conn = get_connection(database_path=":memory:")
+    try:
+        cur = conn.execute("PRAGMA busy_timeout")
+        assert cur.fetchone()[0] == 5000
     finally:
         conn.close()
 

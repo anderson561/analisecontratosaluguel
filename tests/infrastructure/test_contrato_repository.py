@@ -251,6 +251,43 @@ def test_excluir_id_inexistente_retorna_false_e_nao_altera_nada(repo):
     assert len(repo.listar()) == 1
 
 
+def test_listar_ordena_por_processado_em_desc(repo):
+    # Regressao: garante que a ordenacao usada pelo Painel (mais recente
+    # primeiro) continua correta apos o indice idx_contratos_processado_em
+    # (otimizacao de performance, sem mudar comportamento observavel).
+    repo.salvar(
+        arquivo_nome="antigo.pdf",
+        arquivo_hash="hash-antigo",
+        contrato=_contrato_pobre(),
+        linha=_linha_pobre(),
+        revisao=False,
+    )
+    repo.salvar(
+        arquivo_nome="novo.pdf",
+        arquivo_hash="hash-novo",
+        contrato=_contrato_pobre(),
+        linha=_linha_pobre(),
+        revisao=False,
+    )
+    # Sobrescreve os timestamps para valores conhecidos e fora da ordem de
+    # insercao, provando que a ordenacao vem de processado_em e nao da
+    # ordem em que os registros foram inseridos.
+    conn = repo._conn
+    conn.execute(
+        "UPDATE contratos SET processado_em = ? WHERE arquivo_hash = ?",
+        ("2020-01-01T00:00:00+00:00", "hash-antigo"),
+    )
+    conn.execute(
+        "UPDATE contratos SET processado_em = ? WHERE arquivo_hash = ?",
+        ("2030-01-01T00:00:00+00:00", "hash-novo"),
+    )
+    conn.commit()
+
+    registros = repo.listar()
+
+    assert [r.arquivo_hash for r in registros] == ["hash-novo", "hash-antigo"]
+
+
 def test_excluir_todos_remove_tudo_e_retorna_a_contagem(repo):
     repo.salvar(
         arquivo_nome="a.pdf",

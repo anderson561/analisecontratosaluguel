@@ -57,6 +57,12 @@ def _abrir_conexao(database_path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(database_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # WAL separa leitores de escritores: evita que a GUI (thread principal)
+    # trave esperando uma escrita do processamento (thread separada) terminar,
+    # e vice-versa. busy_timeout faz uma conexao aguardar um instante em vez
+    # de falhar na hora com "database is locked" em contencao momentanea.
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
     return conn
 
 
@@ -127,6 +133,9 @@ def init_schema(conn: sqlite3.Connection) -> None:
                 contrato_json TEXT NOT NULL,
                 linha_json TEXT NOT NULL
             );
+
+            CREATE INDEX IF NOT EXISTS idx_contratos_processado_em
+                ON contratos (processado_em DESC);
             """
         )
         conn.commit()

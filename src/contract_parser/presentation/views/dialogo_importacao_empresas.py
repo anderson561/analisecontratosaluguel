@@ -1,4 +1,4 @@
-"""Diálogo de confirmação de importação de empresas (RF01, Fase 3).
+"""Diálogo de confirmação de importação de empresas (RF01, Fase 3-4).
 
 ``ctk.CTkToplevel`` modal aberto por ``MainWindow._on_importar`` depois que o
 usuário já escolheu o arquivo (o ``filedialog`` continua lá — este módulo só
@@ -6,9 +6,14 @@ recebe o ``Path`` já resolvido). Mostra o resultado de ``inspecionar()``
 (aba/header/mapa de colunas sugeridos + prévia tabular) e deixa o usuário
 corrigir tudo antes de confirmar a importação de fato.
 
-Nesta fase a confirmação chama ``EmpresasController.importar_planilha`` de
-forma SÍNCRONA (sem thread/progresso real/cancelamento — isso é uma fase
-futura, já suportada pelo controller mas não usada aqui).
+Desde a Fase 4 a confirmação roda ``EmpresasController.importar_planilha``
+numa ``threading.Thread`` (worker) em vez de bloquear a janela: a worker só
+chama o controller e publica progresso/resultado numa ``queue.Queue``; a main
+thread drena a fila via polling (``self.after``) e é a única que toca
+widgets — Tkinter não é thread-safe (ver ``executar_importacao_em_thread`` e
+``_poll_fila_importacao`` abaixo). A barra de progresso é determinada (o
+total de linhas já é conhecido antes de importar), diferente do padrão
+indeterminado de ``main_window.py:_processar_e_exibir``.
 
 Reaproveita os tokens de cor (``_COR_*``) e a formatação de resumo já
 estabelecidos em ``main_window.py`` — import direto, sem duplicar valores.
@@ -16,13 +21,17 @@ estabelecidos em ``main_window.py`` — import direto, sem duplicar valores.
 local), então esta dependência em sentido único não gera import circular.
 
 Funções de nível de módulo (``formatar_tamanho_arquivo``, ``opcoes_colunas``,
-``indice_da_opcao``, ``recalcular_mapa_e_total``, ``sugerir_para_aba``) são
-puras — sem Tk — de propósito: concentram toda a lógica não-trivial do
-diálogo para serem testadas isoladamente (ver ``xp-coach``: design simples e
-TDD não abrem mão de testabilidade só porque a tela é gráfica).
+``indice_da_opcao``, ``recalcular_mapa_e_total``, ``sugerir_para_aba``,
+``executar_importacao_em_thread``) são puras — sem Tk — de propósito:
+concentram toda a lógica não-trivial do diálogo para serem testadas
+isoladamente (ver ``xp-coach``: design simples e TDD não abrem mão de
+testabilidade só porque a tela é gráfica).
 """
 from __future__ import annotations
 
+import queue
+import threading
+from collections.abc import Callable
 from pathlib import Path
 from tkinter import messagebox, ttk
 
@@ -31,6 +40,7 @@ import customtkinter as ctk
 from contract_parser.application.empresa_importer import (
     AbaInfo,
     ArquivoImportacaoError,
+    ImportResumo,
     MapeamentoColunas,
     PlanilhaInfo,
     detectar_colunas,
@@ -47,6 +57,58 @@ from contract_parser.presentation.views.main_window import (
     _COR_SUPERFICIE_ALT,
     _COR_TEXTO_SECUNDARIO,
 )
+
+# Item que a worker thread publica na fila: ("progresso", atual, total) a
+# cada linha processada, ou ("resultado", resumo, cancelado) / ("erro",
+# mensagem) como desfecho final (sempre o último item).
+_ItemFila = tuple
+
+
+def executar_importacao_em_thread(
+    *,
+    importar: Callable[..., ImportResumo],
+    caminho: Path,
+    aba: int | None,
+    linha_header: int | None,
+    mapa: MapeamentoColunas,
+    fila: queue.Queue[_ItemFila],
+    cancelado: threading.Event,
+) -> None:
+    """Função-alvo da worker thread de importação (Fase 4).
+
+    Roda em ``threading.Thread(target=executar_importacao_em_thread, ...)``,
+    NUNCA na main thread. Por isso, e só por isso, esta função não pode tocar
+    nenhum widget Tkinter/CustomTkinter (nem ``messagebox``): ela só chama
+    ``importar`` (na prática ``EmpresasController.importar_planilha``, aqui
+    injetado por parâmetro para permitir teste com um fake, sem thread real)
+    e publica tudo em ``fila`` — quem desenha a tela é ``_poll_fila_importacao``,
+    na main thread.
+
+    Publica ``("progresso", atual, total)`` uma vez por linha (via
+    ``on_progress``, repassado ao controller), e por fim, sempre como último
+    item: ``("resultado", resumo, cancelado.is_set())`` em caso de sucesso
+    (inclusive cancelamento — o controller devolve resumo parcial, não
+    lança exceção) ou ``("erro", mensagem)`` se o controller levantar
+    ``ControllerError``.
+    """
+
+    def _on_progress(atual: int, total: int) -> None:
+        fila.put(("progresso", atual, total))
+
+    try:
+        resumo = importar(
+            caminho,
+            aba=aba,
+            linha_header=linha_header,
+            mapa=mapa,
+            on_progress=_on_progress,
+            cancelado=cancelado,
+        )
+    except ControllerError as exc:
+        fila.put(("erro", str(exc)))
+        return
+    fila.put(("resultado", resumo, cancelado.is_set()))
+
 
 # Nº de linhas de amostra guardadas por aba em ``AbaInfo.amostra`` (ver
 # ``empresa_importer._TAMANHO_AMOSTRA``). A prévia/recálculo desta tela opera
@@ -142,6 +204,12 @@ class DialogoImportacaoEmpresas(ctk.CTkToplevel):
         self._aba_atual = self._info.aba_sugerida
         self._linha_header_atual = self._info.linha_header_sugerida
         self._mapa_atual = self._info.mapa_sugerido
+        self._total_estimado = 0
+
+        # Estado da importação em andamento (Fase 4): ``None`` quando nenhuma
+        # importação está rodando (ver ``_on_cancelar``).
+        self._evento_cancelamento: threading.Event | None = None
+        self._fila_importacao: queue.Queue[_ItemFila] | None = None
 
         self._construir_widgets()
         self._atualizar_tudo()
@@ -150,6 +218,12 @@ class DialogoImportacaoEmpresas(ctk.CTkToplevel):
         self.transient(master)
         self.grab_set()
         self.focus_set()
+        # "X" nativo da barra de título: mesma semântica do botão "Cancelar"
+        # (cancela se há importação em andamento; senão fecha direto). Sem
+        # isso, o "X" chamaria self.destroy() puro e destruiria os widgets
+        # enquanto a worker thread ainda publica na fila e o polling
+        # (self.after) ainda está agendado, gerando TclError no próximo tick.
+        self.protocol("WM_DELETE_WINDOW", self._on_cancelar)
 
     # ------------------------------------------------------------------ #
     # Construção dos widgets (estático — o conteúdo é preenchido por
@@ -245,13 +319,30 @@ class DialogoImportacaoEmpresas(ctk.CTkToplevel):
         self._combo_razao.bind("<<ComboboxSelected>>", self._on_mapa_change)
         self._combo_razao.pack(anchor="w")
 
-        frame_botoes = ctk.CTkFrame(self, fg_color="transparent")
-        frame_botoes.pack(fill="x", padx=16, pady=16)
-        ctk.CTkButton(
-            frame_botoes, text="Cancelar", fg_color=_COR_SECUNDARIA, command=self.destroy
-        ).pack(side="right", padx=(8, 0))
+        # Progresso da importação (Fase 4): criado aqui mas escondido — só
+        # aparece durante ``_on_confirmar`` (barra DETERMINADA: o total de
+        # linhas já é conhecido via ``self._total_estimado``, diferente do
+        # padrão indeterminado de ``main_window.py:_processar_e_exibir``).
+        self._frame_progresso = ctk.CTkFrame(self, fg_color="transparent")
+        self._barra_progresso = ctk.CTkProgressBar(self._frame_progresso, mode="determinate")
+        self._barra_progresso.set(0)
+        self._barra_progresso.pack(fill="x")
+        self._lbl_progresso = ctk.CTkLabel(
+            self._frame_progresso, text="", text_color=_COR_TEXTO_SECUNDARIO, anchor="w"
+        )
+        self._lbl_progresso.pack(fill="x", pady=(4, 0))
+
+        self._frame_botoes = ctk.CTkFrame(self, fg_color="transparent")
+        self._frame_botoes.pack(fill="x", padx=16, pady=16)
+        self._btn_cancelar = ctk.CTkButton(
+            self._frame_botoes,
+            text="Cancelar",
+            fg_color=_COR_SECUNDARIA,
+            command=self._on_cancelar,
+        )
+        self._btn_cancelar.pack(side="right", padx=(8, 0))
         self._btn_confirmar = ctk.CTkButton(
-            frame_botoes,
+            self._frame_botoes,
             text="Confirmar importação",
             fg_color=_COR_PRIMARIA,
             hover_color=_COR_PRIMARIA_HOVER,
@@ -275,6 +366,7 @@ class DialogoImportacaoEmpresas(ctk.CTkToplevel):
 
         mapa, total = recalcular_mapa_e_total(amostra, self._linha_header_atual, aba.n_linhas_uteis)
         self._mapa_atual = mapa
+        self._total_estimado = total
         self._lbl_total.configure(text=f"Total estimado: {total} linha(s)")
 
         self._preencher_preview(amostra)
@@ -355,25 +447,109 @@ class DialogoImportacaoEmpresas(ctk.CTkToplevel):
             )
         self._atualizar_estado_confirmar()
 
+    def _on_cancelar(self) -> None:
+        """Botão "Cancelar": fecha direto se nada roda; senão só sinaliza o
+        ``Event`` cooperativo — quem realmente para a importação e fecha a
+        janela é ``_poll_fila_importacao`` ao receber o resultado parcial."""
+        if self._evento_cancelamento is not None:
+            self._evento_cancelamento.set()
+        else:
+            self.destroy()
+
+    def _definir_campos_habilitados(self, habilitados: bool) -> None:
+        """Trava/destrava aba/header/mapa/confirmar durante a importação —
+        "Cancelar" fica sempre clicável (é o único jeito de interromper)."""
+        estado_combo = "readonly" if habilitados else "disabled"
+        estado_entry = "normal" if habilitados else "disabled"
+        if self._combo_aba is not None:
+            self._combo_aba.configure(state=estado_combo)
+        self._ent_header.configure(state=estado_entry)
+        self._combo_cnpj.configure(state=estado_combo)
+        self._combo_razao.configure(state=estado_combo)
+        if habilitados:
+            self._atualizar_estado_confirmar()
+        else:
+            self._btn_confirmar.configure(state="disabled")
+
     def _on_confirmar(self) -> None:
         if self._mapa_atual is None:
             return
-        try:
-            resumo = self._master_janela._c.empresas.importar_planilha(
-                self._caminho,
-                aba=self._aba_atual,
-                linha_header=self._linha_header_atual,
-                mapa=self._mapa_atual,
-            )
-        except ControllerError as exc:
-            messagebox.showerror("Importação", str(exc))
-            self._master_janela._atualizar_status()
+
+        self._definir_campos_habilitados(False)
+        self._barra_progresso.set(0)
+        self._lbl_progresso.configure(text=f"Importando 0/{self._total_estimado}...")
+        self._frame_progresso.pack(fill="x", padx=16, pady=(0, 8), before=self._frame_botoes)
+
+        evento = threading.Event()
+        fila: queue.Queue[_ItemFila] = queue.Queue()
+        self._evento_cancelamento = evento
+        self._fila_importacao = fila
+
+        # Worker: só I/O + parsing + persistência (via controller) + fila —
+        # zero Tkinter dentro dela (ver docstring de
+        # ``executar_importacao_em_thread``). Quem toca widget é sempre a
+        # main thread, no polling agendado logo abaixo.
+        threading.Thread(
+            target=executar_importacao_em_thread,
+            kwargs={
+                "importar": self._master_janela._c.empresas.importar_planilha,
+                "caminho": self._caminho,
+                "aba": self._aba_atual,
+                "linha_header": self._linha_header_atual,
+                "mapa": self._mapa_atual,
+                "fila": fila,
+                "cancelado": evento,
+            },
+            daemon=True,
+        ).start()
+
+        self.after(80, self._poll_fila_importacao)
+
+    def _poll_fila_importacao(self) -> None:
+        """Drena a fila na main thread (único lugar que toca widgets) e se
+        reagenda enquanto a importação segue em andamento."""
+        fila = self._fila_importacao
+        if fila is None:
             return
+        try:
+            while True:
+                item = fila.get_nowait()
+                tipo = item[0]
+                if tipo == "progresso":
+                    _, atual, total = item
+                    self._atualizar_progresso(atual, total)
+                elif tipo == "resultado":
+                    _, resumo, cancelou = item
+                    self._finalizar_importacao_sucesso(resumo, cancelou)
+                    return
+                else:  # "erro"
+                    _, mensagem = item
+                    self._finalizar_importacao_erro(mensagem)
+                    return
+        except queue.Empty:
+            pass
+        self.after(80, self._poll_fila_importacao)
+
+    def _atualizar_progresso(self, atual: int, total: int) -> None:
+        self._barra_progresso.set(atual / total if total else 0.0)
+        self._lbl_progresso.configure(text=f"Importando {atual}/{total}...")
+
+    def _finalizar_importacao_sucesso(self, resumo: ImportResumo, cancelou: bool) -> None:
+        sufixo = " (cancelado)" if cancelou else ""
         self._master_janela._lbl_import.configure(
             text=(
                 f"Importados: {resumo.importados}  ·  Duplicados: {resumo.duplicados}"
-                f"  ·  Erros: {resumo.total_erros}"
+                f"  ·  Erros: {resumo.total_erros}{sufixo}"
             )
         )
         self._master_janela._recarregar_empresas()
         self.destroy()
+
+    def _finalizar_importacao_erro(self, mensagem: str) -> None:
+        self._evento_cancelamento = None
+        self._fila_importacao = None
+        self._frame_progresso.pack_forget()
+        self._lbl_progresso.configure(text="")
+        self._definir_campos_habilitados(True)
+        messagebox.showerror("Importação", mensagem)
+        self._master_janela._atualizar_status()

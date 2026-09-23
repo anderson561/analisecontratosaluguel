@@ -18,7 +18,9 @@ padrão de streaming evita OOM se a base crescer.
 from __future__ import annotations
 
 import csv
+import threading
 import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -485,72 +487,137 @@ def inspecionar(caminho: str | Path) -> PlanilhaInfo:
     )
 
 
+def _processar_linha_empresa(
+    linha: list[object],
+    mapa: MapeamentoColunas,
+    origem: str,
+    n_linha: int,
+    vistos: set[str],
+    resumo: ImportResumo,
+    a_persistir: list[Empresa],
+) -> None:
+    """Processa 1 linha de dado: valida, deduplica e empilha para persistir.
+
+    Nunca lança — erro de linha (CNPJ inválido, dado inválido) é acumulado em
+    ``resumo.erros`` e a linha é pulada, sem abortar o lote. Extraído do corpo
+    do loop de ``EmpresaImporter.importar`` para que o loop possa chamar
+    ``on_progress`` uma única vez por iteração, cobrindo todo desfecho
+    (sucesso/erro/duplicado/linha vazia) sem repetir a chamada em cada ramo.
+    """
+    cnpj_bruto = linha[mapa.idx_cnpj] if mapa.idx_cnpj < len(linha) else None
+    razao_bruto = linha[mapa.idx_razao] if mapa.idx_razao < len(linha) else None
+
+    if not _celula_str(cnpj_bruto) and not _celula_str(razao_bruto):
+        return  # linha totalmente vazia: ignora silenciosamente
+
+    try:
+        cnpj = normalizar_cnpj(cnpj_bruto) if cnpj_bruto is not None else ""
+        if not cnpj:
+            raise CNPJInvalidoError("CNPJ ausente na linha.")
+    except CNPJInvalidoError as exc:
+        resumo.erros.append(ErroLinha(n_linha, f"CNPJ inválido: {exc}"))
+        return
+
+    if cnpj in vistos:
+        resumo.duplicados += 1
+        return
+
+    try:
+        empresa = Empresa(
+            cnpj=cnpj,
+            razao_social=_celula_str(razao_bruto),
+            origem_import=origem,
+        )
+    except ValidationError as exc:
+        resumo.erros.append(
+            ErroLinha(n_linha, f"Dados inválidos: {formatar_erro_validacao(exc)}")
+        )
+        return
+    except ValueError as exc:
+        resumo.erros.append(ErroLinha(n_linha, f"Dados inválidos: {exc}"))
+        return
+
+    vistos.add(cnpj)
+    a_persistir.append(empresa)
+
+
 class EmpresaImporter:
     """Caso de uso: importar um arquivo de empresas para o repositório."""
 
     def __init__(self, repository: EmpresaRepositoryProtocol) -> None:
         self._repo = repository
 
-    def importar(self, caminho: str | Path) -> ImportResumo:
-        """Importa .xlsx/.csv: auto-mapeia, normaliza, deduplica e persiste.
+    def importar(
+        self,
+        caminho: str | Path,
+        *,
+        aba: int | None = None,
+        linha_header: int | None = None,
+        mapa: MapeamentoColunas | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
+        cancelado: threading.Event | None = None,
+    ) -> ImportResumo:
+        """Importa .xlsx/.csv/.ods: auto-mapeia, normaliza, deduplica e persiste.
 
         Erros de linha (CNPJ inválido, razão vazia) NÃO abortam o lote — são
         acumulados no resumo. Persistência via ``upsert_many`` (idempotente).
+
+        Todos os parâmetros keyword-only são opcionais; ``importar(caminho)``
+        sozinho preserva o comportamento de sempre (aba 0, header na linha 0,
+        auto-mapeamento, sem progresso/cancelamento):
+
+        - ``aba``: índice da aba a ler (só ``.ods`` tem múltiplas abas — pedir
+          uma aba != 0 num ``.xlsx``/``.csv`` levanta ``ArquivoImportacaoError``).
+        - ``linha_header``: índice (0-based) da linha de header; linhas antes
+          dela (ex.: título mesclado) são ignoradas, nunca viram dado.
+        - ``mapa``: quando informado, usado tal qual — pula ``detectar_colunas``
+          (é a tela de confirmação dizendo explicitamente qual coluna é qual).
+        - ``on_progress(atual, total)``: chamado 1x por linha de dado, depois
+          de processá-la (sucesso, erro ou duplicado — sempre).
+        - ``cancelado``: ``threading.Event`` cooperativo — checado no início de
+          cada iteração; se já setado, o loop para ali (``break``) e o resumo
+          parcial já processado/persistido é devolvido normalmente.
         """
         caminho = Path(caminho)
         if not caminho.is_file():
             raise ArquivoImportacaoError(f"Arquivo não encontrado: {caminho}")
 
-        linhas = _ler_linhas(caminho)
+        sufixo = caminho.suffix.lower()
+        if sufixo == ".ods":
+            linhas = _ler_linhas_ods(caminho, indice_aba=aba if aba is not None else 0)
+        else:
+            if aba is not None and aba != 0:
+                raise ArquivoImportacaoError(
+                    f"O formato {sufixo!r} não tem múltiplas abas — não é "
+                    f"possível importar a aba {aba} (omita ``aba`` ou use 0)."
+                )
+            linhas = _ler_linhas(caminho)
+
         resumo = ImportResumo()
         if not linhas:
             return resumo
 
-        headers, dados = linhas[0], linhas[1:]
+        idx_header = linha_header if linha_header is not None else 0
+        headers, dados = linhas[idx_header], linhas[idx_header + 1 :]
         resumo.total_linhas = len(dados)
-        mapa = detectar_colunas(headers, dados)
+        mapa_efetivo = mapa if mapa is not None else detectar_colunas(headers, dados)
 
         vistos: set[str] = set()
         a_persistir: list[Empresa] = []
         origem = caminho.name
+        total = len(dados)
 
         for offset, linha in enumerate(dados):
-            n_linha = offset + 2  # 1-based + header
-            cnpj_bruto = linha[mapa.idx_cnpj] if mapa.idx_cnpj < len(linha) else None
-            razao_bruto = linha[mapa.idx_razao] if mapa.idx_razao < len(linha) else None
+            if cancelado is not None and cancelado.is_set():
+                break
 
-            if not _celula_str(cnpj_bruto) and not _celula_str(razao_bruto):
-                continue  # linha totalmente vazia: ignora silenciosamente
+            n_linha = idx_header + offset + 2  # 1-based + header
+            _processar_linha_empresa(
+                linha, mapa_efetivo, origem, n_linha, vistos, resumo, a_persistir
+            )
 
-            try:
-                cnpj = normalizar_cnpj(cnpj_bruto) if cnpj_bruto is not None else ""
-                if not cnpj:
-                    raise CNPJInvalidoError("CNPJ ausente na linha.")
-            except CNPJInvalidoError as exc:
-                resumo.erros.append(ErroLinha(n_linha, f"CNPJ inválido: {exc}"))
-                continue
-
-            if cnpj in vistos:
-                resumo.duplicados += 1
-                continue
-
-            try:
-                empresa = Empresa(
-                    cnpj=cnpj,
-                    razao_social=_celula_str(razao_bruto),
-                    origem_import=origem,
-                )
-            except ValidationError as exc:
-                resumo.erros.append(
-                    ErroLinha(n_linha, f"Dados inválidos: {formatar_erro_validacao(exc)}")
-                )
-                continue
-            except ValueError as exc:
-                resumo.erros.append(ErroLinha(n_linha, f"Dados inválidos: {exc}"))
-                continue
-
-            vistos.add(cnpj)
-            a_persistir.append(empresa)
+            if on_progress is not None:
+                on_progress(offset + 1, total)
 
         if a_persistir:
             self._repo.upsert_many(a_persistir)

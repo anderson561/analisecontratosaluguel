@@ -1,6 +1,7 @@
 """Testes do importador em lote: auto-mapeamento, dedup, erros e CA-01."""
 from __future__ import annotations
 
+import threading
 import time
 from pathlib import Path
 
@@ -9,6 +10,7 @@ import pytest
 from contract_parser.application.empresa_importer import (
     ArquivoImportacaoError,
     EmpresaImporter,
+    MapeamentoColunas,
     detectar_colunas,
     detectar_linha_header,
     inspecionar,
@@ -338,6 +340,139 @@ def test_importar_ods_corrompido_levanta(importer, tmp_path):
     caminho.write_bytes(b"isto nao e um ods valido")
     with pytest.raises(ArquivoImportacaoError):
         importer.importar(caminho)
+
+
+# --------------------------------------------------------------------------- #
+# Fase 2 — ``importar()`` com aba/linha_header/mapa/on_progress/cancelado
+# (todos opcionais; a superfície acima — listar_abas/detectar_linha_header/
+# inspecionar/detectar_colunas — já estava pronta e testada; aqui só
+# verificamos que ``EmpresaImporter.importar`` sabe USÁ-LA).
+# --------------------------------------------------------------------------- #
+def test_importar_aba_explicita_ods_le_aba_correta(importer, tmp_path):
+    caminho = construir_ods_multiplas_abas(tmp_path / "multi_aba.ods")
+
+    resumo = importer.importar(caminho, aba=1)
+
+    assert resumo.importados == 1
+    cnpjs = {e.cnpj for e in importer._repo.list_all()}
+    assert cnpjs == {cnpj_valido_sequencial(503)}
+
+
+def test_importar_aba_nao_zero_em_xlsx_levanta(importer, tmp_path):
+    caminho = construir_xlsx_50_empresas(tmp_path / "portfolio50.xlsx")
+    with pytest.raises(ArquivoImportacaoError):
+        importer.importar(caminho, aba=1)
+
+
+def test_importar_aba_nao_zero_em_csv_levanta(importer):
+    with pytest.raises(ArquivoImportacaoError):
+        importer.importar(FIXTURES / "empresas_ponto_virgula.csv", aba=1)
+
+
+def test_importar_linha_header_explicita_ignora_titulo_antes_do_header(importer, tmp_path):
+    """Sem ``linha_header`` explícito, a linha de título vira header e a linha
+    de header de verdade ("CNPJ"/"Razão Social") vira "linha de dado", gerando
+    o erro espúrio de CNPJ inválido (bug 3 do diagnóstico original). Com
+    ``linha_header=1`` explícito, a linha de título é apenas ignorada e as 2
+    empresas são importadas sem erro — prova a correção end-to-end."""
+    caminho = construir_ods_titulo_antes_do_header(tmp_path / "titulo.ods")
+
+    resumo = importer.importar(caminho, linha_header=1)
+
+    assert resumo.importados == 2
+    assert resumo.total_erros == 0
+    cnpjs = {e.cnpj for e in importer._repo.list_all()}
+    assert cnpjs == {cnpj_valido_sequencial(401), cnpj_valido_sequencial(402)}
+
+
+def test_importar_mapa_explicito_ignora_auto_deteccao(importer, tmp_path):
+    from openpyxl import Workbook
+
+    caminho = tmp_path / "mapa_explicito.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    # Header/valor levam a auto-detecção a escolher as colunas 0/1 (CNPJ /
+    # Razão Social "principais"); as colunas 2/3 também são um par
+    # CNPJ/Razão Social válido, mas só devem ser usadas se ``mapa=`` for
+    # passado explicitamente, ignorando por completo ``detectar_colunas``.
+    ws.append(["CNPJ", "Razão Social", "CNPJ Alternativo", "Razão Social Alternativa"])
+    ws.append(
+        [
+            cnpj_valido_sequencial(701),
+            "Empresa Um LTDA",
+            cnpj_valido_sequencial(801),
+            "Empresa Alt Um LTDA",
+        ]
+    )
+    ws.append(
+        [
+            cnpj_valido_sequencial(702),
+            "Empresa Dois LTDA",
+            cnpj_valido_sequencial(802),
+            "Empresa Alt Dois LTDA",
+        ]
+    )
+    wb.save(caminho)
+
+    mapa = MapeamentoColunas(idx_cnpj=2, idx_razao=3)
+    resumo = importer.importar(caminho, mapa=mapa)
+
+    assert resumo.importados == 2
+    cnpjs = {e.cnpj for e in importer._repo.list_all()}
+    assert cnpjs == {cnpj_valido_sequencial(801), cnpj_valido_sequencial(802)}
+    razoes = {e.razao_social for e in importer._repo.list_all()}
+    assert razoes == {"Empresa Alt Um LTDA", "Empresa Alt Dois LTDA"}
+
+
+def _construir_xlsx_n_empresas(caminho: Path, base: int, quantidade: int) -> Path:
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["CNPJ", "Razão Social"])
+    for i in range(quantidade):
+        ws.append([cnpj_valido_sequencial(base + i), f"Empresa {i} LTDA"])
+    wb.save(caminho)
+    return caminho
+
+
+def test_importar_on_progress_chamado_uma_vez_por_linha(importer, tmp_path):
+    caminho = _construir_xlsx_n_empresas(tmp_path / "cinco.xlsx", base=900, quantidade=5)
+
+    chamadas: list[tuple[int, int]] = []
+    resumo = importer.importar(caminho, on_progress=lambda atual, total: chamadas.append((atual, total)))
+
+    assert resumo.importados == 5
+    assert chamadas == [(1, 5), (2, 5), (3, 5), (4, 5), (5, 5)]
+
+
+def test_importar_cancelado_antes_de_iniciar_retorna_resumo_vazio(importer, tmp_path):
+    caminho = construir_xlsx_50_empresas(tmp_path / "portfolio50.xlsx")
+    evento = threading.Event()
+    evento.set()  # já cancelado antes mesmo de chamar importar()
+
+    resumo = importer.importar(caminho, cancelado=evento)
+
+    assert resumo.importados == 0
+    assert resumo.duplicados == 0
+    assert resumo.total_erros == 0
+    assert importer._repo.list_all() == []
+
+
+def test_importar_cancelado_durante_progresso_para_apos_n_linhas(importer, tmp_path):
+    caminho = _construir_xlsx_n_empresas(tmp_path / "cinco.xlsx", base=950, quantidade=5)
+    evento = threading.Event()
+    contagem = {"n": 0}
+
+    def progresso(atual: int, total: int) -> None:
+        contagem["n"] += 1
+        if contagem["n"] == 2:  # "cancele depois da 2ª linha"
+            evento.set()
+
+    resumo = importer.importar(caminho, on_progress=progresso, cancelado=evento)
+
+    assert resumo.importados == 2
+    assert len(importer._repo.list_all()) == 2
 
 
 # --------------------------------------------------------------------------- #

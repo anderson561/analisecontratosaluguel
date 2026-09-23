@@ -10,6 +10,7 @@ Dados 100% fictícios (sem PII real).
 """
 from __future__ import annotations
 
+import threading
 from datetime import date
 from decimal import Decimal
 from unittest.mock import patch
@@ -21,6 +22,7 @@ from contract_parser.application.document_ingestor import (
     ErroArquivo,
     IngestaoResumo,
 )
+from contract_parser.application.empresa_importer import ImportResumo, MapeamentoColunas
 from contract_parser.application.relatorio_service import RelatorioService
 from contract_parser.domain.contrato import (
     Contrato,
@@ -95,6 +97,23 @@ class RepoQueFalha:
 
     def upsert_many(self, empresas):
         raise RepositoryError("banco de dados indisponivel")
+
+
+class RegistradorImporter:
+    """Fake de ``EmpresaImporter`` que só registra os kwargs recebidos (sem IO).
+
+    Usado para provar que ``EmpresasController.importar_planilha`` repassa os
+    parâmetros novos (aba/linha_header/mapa/on_progress/cancelado) tal qual —
+    a lógica de cada um já é testada a fundo em
+    ``tests/application/test_empresa_importer.py``; aqui é só o repasse.
+    """
+
+    def __init__(self) -> None:
+        self.chamadas: list[dict] = []
+
+    def importar(self, caminho, **kwargs) -> ImportResumo:
+        self.chamadas.append({"caminho": caminho, **kwargs})
+        return ImportResumo()
 
 
 def _repo_portfolio() -> FakeEmpresaRepository:
@@ -205,6 +224,53 @@ def test_importar_arquivo_inexistente_vira_controller_error(tmp_path):
     ctrl = EmpresasController(FakeEmpresaRepository())
     with pytest.raises(ControllerError):
         ctrl.importar_planilha(tmp_path / "nao_existe.csv")
+
+
+def test_importar_planilha_repassa_parametros_novos_ao_importer(tmp_path):
+    fake_importer = RegistradorImporter()
+    ctrl = EmpresasController(FakeEmpresaRepository(), importer=fake_importer)
+    evento = threading.Event()
+
+    def progresso(atual: int, total: int) -> None:
+        pass
+
+    mapa = MapeamentoColunas(idx_cnpj=0, idx_razao=1)
+    caminho = tmp_path / "qualquer.xlsx"
+
+    ctrl.importar_planilha(
+        caminho,
+        aba=1,
+        linha_header=2,
+        mapa=mapa,
+        on_progress=progresso,
+        cancelado=evento,
+    )
+
+    assert len(fake_importer.chamadas) == 1
+    chamada = fake_importer.chamadas[0]
+    assert chamada["caminho"] == caminho
+    assert chamada["aba"] == 1
+    assert chamada["linha_header"] == 2
+    assert chamada["mapa"] is mapa
+    assert chamada["on_progress"] is progresso
+    assert chamada["cancelado"] is evento
+
+
+def test_importar_planilha_sem_parametros_novos_repassa_none(tmp_path):
+    """Chamada sem os parâmetros novos preserva o comportamento antigo: todos
+    chegam como ``None`` ao importer, que por sua vez trata ``None`` como
+    "sem esse parâmetro"."""
+    fake_importer = RegistradorImporter()
+    ctrl = EmpresasController(FakeEmpresaRepository(), importer=fake_importer)
+
+    ctrl.importar_planilha(tmp_path / "qualquer.xlsx")
+
+    chamada = fake_importer.chamadas[0]
+    assert chamada["aba"] is None
+    assert chamada["linha_header"] is None
+    assert chamada["mapa"] is None
+    assert chamada["on_progress"] is None
+    assert chamada["cancelado"] is None
 
 
 # --------------------------------------------------------------------------- #

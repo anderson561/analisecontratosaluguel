@@ -20,6 +20,8 @@ Princípios (ADR-001 + ADR-002 + skills UX/Python):
 """
 from __future__ import annotations
 
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -35,6 +37,7 @@ from contract_parser.application.empresa_importer import (
     ArquivoImportacaoError,
     EmpresaImporter,
     ImportResumo,
+    MapeamentoColunas,
 )
 from contract_parser.application.empresa_service import EmpresaService
 from contract_parser.application.relatorio_service import RelatorioService
@@ -174,10 +177,32 @@ class EmpresasController:
         self._importer = importer if importer is not None else EmpresaImporter(repository)
         self._service = service if service is not None else EmpresaService(repository)
 
-    def importar_planilha(self, caminho: str | Path) -> ImportResumo:
-        """Importa um ``.xlsx``/``.csv`` e devolve o resumo (importados/dup/erros)."""
+    def importar_planilha(
+        self,
+        caminho: str | Path,
+        *,
+        aba: int | None = None,
+        linha_header: int | None = None,
+        mapa: MapeamentoColunas | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
+        cancelado: threading.Event | None = None,
+    ) -> ImportResumo:
+        """Importa um ``.xlsx``/``.csv``/``.ods`` e devolve o resumo (importados/dup/erros).
+
+        Só repassa a ``EmpresaImporter.importar`` (ver lá o contrato de cada
+        parâmetro) e traduz erro de arquivo/banco em ``ControllerError``.
+        Todos os parâmetros novos são opcionais — chamar sem eles preserva o
+        comportamento de sempre.
+        """
         try:
-            return self._importer.importar(caminho)
+            return self._importer.importar(
+                caminho,
+                aba=aba,
+                linha_header=linha_header,
+                mapa=mapa,
+                on_progress=on_progress,
+                cancelado=cancelado,
+            )
         except ArquivoImportacaoError as exc:
             raise ControllerError(f"Não foi possível importar o arquivo: {exc}") from exc
         except RepositoryError as exc:

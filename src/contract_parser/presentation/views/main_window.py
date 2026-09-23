@@ -291,19 +291,15 @@ class MainWindow(ctk.CTk):
         )
         if not caminho:
             return
-        try:
-            resumo = self._c.empresas.importar_planilha(caminho)
-        except ControllerError as exc:
-            messagebox.showerror("Importação", str(exc))
-            self._atualizar_status()
-            return
-        self._lbl_import.configure(
-            text=(
-                f"Importados: {resumo.importados}  ·  Duplicados: {resumo.duplicados}"
-                f"  ·  Erros: {resumo.total_erros}"
-            )
+        # Import local (não no topo do módulo): o diálogo importa os tokens de
+        # cor deste módulo (``_COR_*``), então um import no topo criaria um
+        # ciclo. Como este import só roda dentro do método (depois que a
+        # classe MainWindow já está totalmente definida), não há ciclo real.
+        from contract_parser.presentation.views.dialogo_importacao_empresas import (
+            DialogoImportacaoEmpresas,
         )
-        self._recarregar_empresas()
+
+        DialogoImportacaoEmpresas(self, Path(caminho))
 
     def _on_adicionar(self) -> None:
         cnpj = self._ent_cnpj.get().strip()

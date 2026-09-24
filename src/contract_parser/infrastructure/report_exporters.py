@@ -22,6 +22,7 @@ from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
+from contract_parser.domain.contrato import ResponsavelDespesa, TipoDespesa
 from contract_parser.domain.relatorio import (
     LinhaContrato,
     Relatorio,
@@ -41,6 +42,8 @@ CABECALHOS_CONTRATOS = [
     "Próximo Reajuste",
     "Reajuste Auto",
     "Vencimento",
+    "Despesas",
+    "Prorrogação",
 ]
 
 _VAZIO = ""  # célula em branco para dado ausente (revisão manual)
@@ -82,6 +85,48 @@ def _texto(valor: str | None) -> str:
     return valor if valor else _VAZIO
 
 
+_ROTULOS_TIPO_DESPESA: dict[TipoDespesa, str] = {
+    TipoDespesa.IPTU: "IPTU",
+    TipoDespesa.CONDOMINIO_ORDINARIO: "Condomínio (ordinário)",
+    TipoDespesa.CONDOMINIO_EXTRAORDINARIO: "Condomínio (extraordinário)",
+    TipoDespesa.SEGURO_INCENDIO: "Seguro-incêndio",
+    TipoDespesa.TAXA_ADMINISTRACAO: "Taxa de administração",
+    TipoDespesa.OUTRAS: "Outras",
+}
+
+
+def formatar_despesas(despesas: dict[TipoDespesa, ResponsavelDespesa | None]) -> str:
+    """Resume o dict tipo->responsável numa string ``"Rótulo: Responsável"``,
+    separada por ``"; "``, na ORDEM DE DECLARAÇÃO de ``TipoDespesa`` (não na
+    ordem de inserção do dict, que reflete a ordem em que os regexes casaram
+    no texto — não determinística entre execuções). Vazio -> string vazia.
+    """
+    if not despesas:
+        return _VAZIO
+    partes = []
+    for tipo in TipoDespesa:
+        if tipo not in despesas:
+            continue
+        responsavel = despesas[tipo]
+        if responsavel == ResponsavelDespesa.LOCADOR:
+            rotulo_resp = "Locador"
+        elif responsavel == ResponsavelDespesa.LOCATARIO:
+            rotulo_resp = "Locatário"
+        else:
+            rotulo_resp = "não identificado"
+        partes.append(f"{_ROTULOS_TIPO_DESPESA[tipo]}: {rotulo_resp}")
+    return "; ".join(partes)
+
+
+def formatar_prorrogacao(automatica: bool, prazo_meses: int | None) -> str:
+    """``"Sim (12 meses)"`` / ``"Sim"`` (sem prazo) / ``"Não"``."""
+    if not automatica:
+        return "Não"
+    if prazo_meses is not None:
+        return f"Sim ({prazo_meses} meses)"
+    return "Sim"
+
+
 def linha_para_celulas(linha: LinhaContrato) -> list[str]:
     """Converte uma :class:`LinhaContrato` na sequência de células apresentáveis."""
     return [
@@ -95,6 +140,8 @@ def linha_para_celulas(linha: LinhaContrato) -> list[str]:
         _texto(linha.proximo_reajuste),
         _sim_nao(linha.reajuste_automatico),
         formatar_data_br(linha.vencimento),
+        formatar_despesas(linha.despesas),
+        formatar_prorrogacao(linha.prorrogacao_automatica, linha.prorrogacao_prazo_meses),
     ]
 
 
@@ -193,6 +240,8 @@ class PdfRelatorioExporter:
                 "",
                 formatar_moeda_brl(contratos.total_irrf_retido),
                 formatar_moeda_brl(contratos.total_reducao_irrf),
+                "",
+                "",
                 "",
                 "",
                 "",

@@ -10,7 +10,7 @@ from decimal import Decimal
 
 import pytest
 
-from contract_parser.domain.contrato import TipoParte
+from contract_parser.domain.contrato import ResponsavelDespesa, TipoDespesa, TipoParte
 from contract_parser.domain.irrf import calcular_irrf, tabela_irrf_2026
 from contract_parser.domain.relatorio import (
     LinhaContrato,
@@ -23,7 +23,10 @@ from contract_parser.infrastructure.report_exporters import (
     ExcelRelatorioExporter,
     PdfRelatorioExporter,
     formatar_data_br,
+    formatar_despesas,
     formatar_moeda_brl,
+    formatar_prorrogacao,
+    linha_para_celulas,
 )
 
 PENDENCIA = "Contrato da Empresa Gamma Holding SA / 00000000000388 não encontrado"
@@ -47,9 +50,9 @@ def _relatorio() -> Relatorio:
             indice="IPCA",
             proximo_reajuste="10/2026",
             reajuste_automatico=True,
-            despesas={},
-            prorrogacao_automatica=False,
-            prorrogacao_prazo_meses=None,
+            despesas={TipoDespesa.IPTU: ResponsavelDespesa.LOCATARIO},
+            prorrogacao_automatica=True,
+            prorrogacao_prazo_meses=12,
             vencimento=date(2028, 10, 10),
         ),
         LinhaContrato(
@@ -100,6 +103,67 @@ def test_formatar_data_br():
     assert formatar_data_br(None) == ""
 
 
+def test_formatar_despesas_vazio():
+    assert formatar_despesas({}) == ""
+
+
+def test_formatar_despesas_um_item():
+    assert (
+        formatar_despesas({TipoDespesa.IPTU: ResponsavelDespesa.LOCATARIO})
+        == "IPTU: Locatário"
+    )
+
+
+def test_formatar_despesas_multiplos_itens_na_ordem_do_enum():
+    # Dict montado FORA de ordem (OUTRAS antes de IPTU) para provar que a
+    # saída segue a ordem de DECLARAÇÃO de TipoDespesa, não a de inserção.
+    despesas = {
+        TipoDespesa.OUTRAS: ResponsavelDespesa.LOCADOR,
+        TipoDespesa.IPTU: ResponsavelDespesa.LOCATARIO,
+    }
+    assert formatar_despesas(despesas) == "IPTU: Locatário; Outras: Locador"
+
+
+def test_formatar_despesas_responsavel_none():
+    assert (
+        formatar_despesas({TipoDespesa.IPTU: None}) == "IPTU: não identificado"
+    )
+
+
+@pytest.mark.parametrize(
+    ("automatica", "prazo_meses", "esperado"),
+    [
+        (False, None, "Não"),
+        (False, 12, "Não"),
+        (True, None, "Sim"),
+        (True, 12, "Sim (12 meses)"),
+    ],
+)
+def test_formatar_prorrogacao(automatica, prazo_meses, esperado):
+    assert formatar_prorrogacao(automatica, prazo_meses) == esperado
+
+
+def test_linha_para_celulas_inclui_despesas_e_prorrogacao_no_final():
+    linha = LinhaContrato(
+        locatario_nome="Alpha Comercio LTDA",
+        locatario_cnpj="00000000000159",
+        locador_nome="João da Silva",
+        valor_aluguel=Decimal("5000.00"),
+        irrf=None,
+        indice="IPCA",
+        proximo_reajuste="10/2026",
+        reajuste_automatico=True,
+        despesas={TipoDespesa.IPTU: ResponsavelDespesa.LOCATARIO},
+        prorrogacao_automatica=True,
+        prorrogacao_prazo_meses=12,
+        vencimento=date(2028, 10, 10),
+    )
+    celulas = linha_para_celulas(linha)
+    assert len(celulas) == 12
+    assert celulas[10] == "IPTU: Locatário"
+    assert celulas[11] == "Sim (12 meses)"
+
+
 # --------------------------------------------------------------------------- #
 # Excel
 # --------------------------------------------------------------------------- #
@@ -128,9 +192,16 @@ def test_excel_gera_duas_abas_com_cabecalhos_e_valores(tmp_path):
     assert contratos["F2"].value == "R$ 312,89"
     assert contratos["I2"].value == "Sim"
     assert contratos["J2"].value == "10/10/2028"
+    # Colunas novas (Despesas/Prorrogação) da linha Alpha.
+    assert contratos["K2"].value == "IPTU: Locatário"
+    assert contratos["L2"].value == "Sim (12 meses)"
     # Locador PJ ⇒ IRRF R$ 0,00 e nenhuma redução.
     assert contratos["E3"].value == "R$ 0,00"
     assert contratos["F3"].value == "R$ 0,00"
+    # Beta não tem despesas/prorrogação registradas (openpyxl grava string
+    # vazia como cela em branco, que volta como None na releitura).
+    assert contratos["K3"].value is None
+    assert contratos["L3"].value == "Não"
 
     # Rodapé: total de IRRF retido (0,00 + 0,00) e total de redução (312,89 + 0,00).
     linhas_valores = list(contratos.iter_rows(values_only=True))
@@ -182,6 +253,9 @@ def test_pdf_gera_arquivo_nao_trivial_com_texto_esperado(tmp_path):
     # Coluna nova: valor da redução aplicada (igual à tabela nesta base: 312,89).
     assert "Redução IRRF" in texto
     assert "R$ 312,89" in texto
+    # Colunas novas: despesas e prorrogação da linha Alpha.
+    assert "Locatário" in texto
+    assert "12 meses)" in texto
     assert PENDENCIA in texto
 
 

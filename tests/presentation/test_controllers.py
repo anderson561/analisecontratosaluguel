@@ -28,8 +28,11 @@ from contract_parser.domain.contrato import (
     Contrato,
     OrigemExtracao,
     Parte,
+    Prorrogacao,
     Reajuste,
     RegistroCampo,
+    ResponsavelDespesa,
+    TipoDespesa,
     TipoParte,
 )
 from contract_parser.domain.documento_texto import DocumentoTexto
@@ -448,6 +451,39 @@ def test_linhas_painel_sem_reducao_para_locador_pj():
 
     assert linha.irrf == "R$ 0,00"
     assert linha.reducao_irrf == "R$ 0,00"
+
+
+def test_linhas_painel_formata_despesas_e_prorrogacao():
+    """Fase 6 do plano de Despesas/Prorrogação: o Painel expõe as duas colunas
+    novas já formatadas pt-BR, reusando ``formatar_despesas``/``formatar_prorrogacao``
+    (``infrastructure/report_exporters.py``) — sem reimplementar a formatação."""
+    contrato = _contrato_pf_pj()
+    contrato = contrato.model_copy(
+        update={
+            "despesas": {TipoDespesa.IPTU: ResponsavelDespesa.LOCATARIO},
+            "prorrogacao": Prorrogacao(automatica=True, prazo_meses=12),
+        }
+    )
+    ctrl = _relatorio_controller([contrato])
+    linha = ctrl.linhas_painel()[0]
+
+    assert linha.despesas == "IPTU: Locatário"
+    assert linha.prorrogacao == "Sim (12 meses)"
+
+
+def test_linhas_painel_despesas_e_prorrogacao_vazias():
+    contrato = _contrato_pf_pj()
+    contrato = contrato.model_copy(
+        update={
+            "despesas": {},
+            "prorrogacao": Prorrogacao(automatica=False, prazo_meses=None),
+        }
+    )
+    ctrl = _relatorio_controller([contrato])
+    linha = ctrl.linhas_painel()[0]
+
+    assert linha.despesas == ""
+    assert linha.prorrogacao == "Não"
 
 
 def test_linha_incompleta_marca_revisao():

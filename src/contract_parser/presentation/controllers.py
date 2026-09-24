@@ -57,7 +57,9 @@ from contract_parser.infrastructure.report_exporters import (
     ExcelRelatorioExporter,
     PdfRelatorioExporter,
     formatar_data_br,
+    formatar_despesas,
     formatar_moeda_brl,
+    formatar_prorrogacao,
 )
 
 
@@ -122,6 +124,8 @@ class LinhaPainel:
     proximo_reajuste: str
     automatico: str
     vencimento: str
+    despesas: str
+    prorrogacao: str
     revisao: bool
     motivo_revisao: str
     registro_id: str | None
@@ -552,6 +556,10 @@ class RelatorioController:
             proximo_reajuste=linha.proximo_reajuste or "",
             automatico=_sim_nao(linha.reajuste_automatico),
             vencimento=formatar_data_br(linha.vencimento),
+            despesas=formatar_despesas(linha.despesas),
+            prorrogacao=formatar_prorrogacao(
+                linha.prorrogacao_automatica, linha.prorrogacao_prazo_meses
+            ),
             revisao=RelatorioController._precisa_revisao(linha, contrato),
             motivo_revisao=RelatorioController._motivo_revisao(linha, contrato),
             registro_id=registro_id,

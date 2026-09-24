@@ -449,6 +449,8 @@ class MainWindow(ctk.CTk):
         ("proximo_reajuste", "Próx. Reajuste", 135),
         ("automatico", "Auto?", 60),
         ("vencimento", "Vencimento", 120),
+        ("despesas", "Despesas", 170),
+        ("prorrogacao", "Prorrogação", 130),
         ("revisao", "Revisão", 90),
     )
 
@@ -613,7 +615,7 @@ class MainWindow(ctk.CTk):
             valores = [
                 linha.locatario, linha.locador, linha.valor, linha.irrf, linha.reducao_irrf,
                 linha.indice, linha.proximo_reajuste, linha.automatico, linha.vencimento,
-                revisao_txt,
+                linha.despesas, linha.prorrogacao, revisao_txt,
             ]
             tree.insert("", "end", iid=iid, values=valores, tags=tags)
 

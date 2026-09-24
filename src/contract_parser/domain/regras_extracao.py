@@ -23,6 +23,8 @@ from contract_parser.domain.contrato import (
     ModalidadeGarantia,
     OrigemExtracao,
     Parte,
+    ResponsavelDespesa,
+    TipoDespesa,
     TipoLocacao,
     TipoParte,
 )
@@ -543,3 +545,144 @@ def extrair_proximo_reajuste(texto: str) -> ResultadoCampo[str]:
     if d is None:
         return ResultadoCampo.nao_encontrado("data de próximo reajuste ilegível")
     return ResultadoCampo(d.isoformat(), CONF_MEDIA)
+
+
+# --------------------------------------------------------------------------- #
+# Despesas contratuais: tipo detectado -> responsável mais próximo no texto
+# --------------------------------------------------------------------------- #
+_RE_IPTU = re.compile(r"\bIPTU\b", re.IGNORECASE)
+# Extraordinária/ordinária: a qualificação pode vir antes ou depois de
+# "condomínio" na frase, mas sempre ADJACENTE (poucas palavras de distância).
+# Janela lazy curta (20 chars) é o que evita que a MESMA menção de "condomínio"
+# seja capturada pelas duas regras quando o texto distingue as duas despesas em
+# cláusulas diferentes da mesma frase (ver teste com ambos os tipos) — uma
+# janela larga colaria o primeiro "condomínio" à qualificação da OUTRA
+# cláusula, à frente, no texto. O `\b` antes de "ordin" garante que não casa
+# dentro de "extraordinári..." (não há fronteira de palavra entre o "a" de
+# "extra" e o "o" de "ordin").
+#
+# "condomínio" é capturado num grupo em cada alternativa (ver
+# ``_posicao_ancora``): a proximidade do responsável deve ser medida a partir
+# da PALAVRA "condomínio" em si, não da qualificação — senão, quando as duas
+# cláusulas (ordinária/extraordinária) estão lado a lado na mesma frase, a
+# qualificação da cláusula seguinte fica textualmente mais perto do
+# responsável da cláusula ANTERIOR do que do seu próprio responsável.
+_RE_CONDOMINIO_EXTRAORDINARIO = re.compile(
+    r"extraordin[áa]ri\w*[^.\n]{0,20}?(condom[íi]nio)"
+    r"|(condom[íi]nio)[^.\n]{0,20}?extraordin[áa]ri\w*",
+    re.IGNORECASE,
+)
+_RE_CONDOMINIO_ORDINARIO = re.compile(
+    r"\bordin[áa]ri\w*[^.\n]{0,20}?(condom[íi]nio)"
+    r"|(condom[íi]nio)[^.\n]{0,20}?\bordin[áa]ri\w*",
+    re.IGNORECASE,
+)
+_RE_SEGURO_INCENDIO = re.compile(
+    r"seguro[-\s]?(?:contra\s+|de\s+)?inc[êe]ndio", re.IGNORECASE
+)
+_RE_TAXA_ADMINISTRACAO = re.compile(r"taxa\s+de\s+administra[çc][ãa]o", re.IGNORECASE)
+
+# Tabela de detecção: primeiro casamento de cada tipo vence (mesmo padrão de
+# ``_INDICES``). ``OUTRAS`` não tem regex própria nesta fase (valor de enum
+# disponível para uso manual/futuro).
+_RE_DESPESAS: tuple[tuple[TipoDespesa, re.Pattern[str]], ...] = (
+    (TipoDespesa.IPTU, _RE_IPTU),
+    (TipoDespesa.CONDOMINIO_EXTRAORDINARIO, _RE_CONDOMINIO_EXTRAORDINARIO),
+    (TipoDespesa.CONDOMINIO_ORDINARIO, _RE_CONDOMINIO_ORDINARIO),
+    (TipoDespesa.SEGURO_INCENDIO, _RE_SEGURO_INCENDIO),
+    (TipoDespesa.TAXA_ADMINISTRACAO, _RE_TAXA_ADMINISTRACAO),
+)
+
+_RE_LOCADOR_PROXIMIDADE = re.compile(r"\b" + _RAIZ_LOCADOR + r"\b", re.IGNORECASE)
+_RE_LOCATARIO_PROXIMIDADE = re.compile(r"\b" + _RAIZ_LOCATARIO + r"\b", re.IGNORECASE)
+
+
+def _posicao_ancora(m: re.Match[str]) -> int:
+    """Posição de referência de um match para medir proximidade de responsável.
+
+    Usa o primeiro grupo capturado não-vazio (a "âncora" semântica, ex.: a
+    palavra "condomínio" em si, e não a qualificação ordinária/extraordinária
+    que a acompanha); padrões sem grupos (IPTU, seguro-incêndio, taxa de
+    administração) caem no início do match inteiro.
+    """
+    for i in range(1, (m.re.groups or 0) + 1):
+        if m.group(i) is not None:
+            return m.start(i)
+    return m.start()
+
+
+def _responsavel_proximo(
+    texto: str, posicao: int, alcance: int = 100
+) -> ResponsavelDespesa | None:
+    """Responsável (LOCADOR/LOCATÁRIO) mais próximo de ``posicao`` no texto.
+
+    Procura em uma janela de ``alcance`` chars para cada lado de ``posicao``;
+    devolve ``None`` se nenhum dos dois rótulos aparecer na janela, ou em caso
+    de empate exato de distância (ambíguo demais para decidir).
+    """
+    inicio = max(0, posicao - alcance)
+    janela = texto[inicio : posicao + alcance]
+    pos_rel = posicao - inicio
+
+    def _distancia_minima(regex: re.Pattern[str]) -> int | None:
+        distancias = [abs(m.start() - pos_rel) for m in regex.finditer(janela)]
+        return min(distancias) if distancias else None
+
+    dist_locador = _distancia_minima(_RE_LOCADOR_PROXIMIDADE)
+    dist_locatario = _distancia_minima(_RE_LOCATARIO_PROXIMIDADE)
+
+    if dist_locador is None and dist_locatario is None:
+        return None
+    if dist_locatario is None or (dist_locador is not None and dist_locador < dist_locatario):
+        return ResponsavelDespesa.LOCADOR
+    if dist_locador is None or dist_locatario < dist_locador:
+        return ResponsavelDespesa.LOCATARIO
+    return None  # empate exato — ambíguo demais para decidir
+
+
+def extrair_despesas(
+    texto: str,
+) -> ResultadoCampo[dict[TipoDespesa, ResponsavelDespesa | None]]:
+    t = texto or ""
+    despesas: dict[TipoDespesa, ResponsavelDespesa | None] = {}
+    for tipo, regex in _RE_DESPESAS:
+        m = regex.search(t)
+        if m:
+            despesas[tipo] = _responsavel_proximo(t, _posicao_ancora(m))
+    if not despesas:
+        return ResultadoCampo.nao_encontrado("nenhuma despesa detectada")
+    return ResultadoCampo(despesas, CONF_ALTA)
+
+
+# --------------------------------------------------------------------------- #
+# Prorrogação/renovação: flag automática + prazo (conceito distinto do prazo
+# original do contrato — não reaproveita as regras de ``extrair_prazo_meses``)
+# --------------------------------------------------------------------------- #
+_RE_PRORROGACAO_AUTOMATICA = re.compile(
+    r"prorrog\w*[^.\n]{0,40}?automat\w*"
+    r"|renova\w*[^.\n]{0,40}?automat\w*"
+    r"|automat\w*[^.\n]{0,40}?(?:prorrog|renova)\w*"
+    r"|prazo\s+indetermin\w*",
+    re.IGNORECASE,
+)
+_RE_PRORROGACAO_PRAZO_MESES = re.compile(
+    r"(?:prorrog|renova)\w*[^.\n]{0,60}?(\d{1,3})\s*\(?[a-zçãêé\s]*\)?\s*meses",
+    re.IGNORECASE,
+)
+
+
+def extrair_prorrogacao_automatica(texto: str) -> ResultadoCampo[bool]:
+    """Flag booleana. Réplica de ``extrair_reajuste_automatico``: ausência de
+    menção é interpretada como ``False`` (confiança baixa → sinaliza revisão)."""
+    if _RE_PRORROGACAO_AUTOMATICA.search(texto or ""):
+        return ResultadoCampo(True, CONF_ALTA)
+    return ResultadoCampo(False, CONF_BAIXA, detalhe="prorrogação automática não mencionada")
+
+
+def extrair_prorrogacao_prazo_meses(texto: str) -> ResultadoCampo[int]:
+    """Prazo (em meses) da PRORROGAÇÃO — nunca inferido do prazo original do
+    contrato: se o número não estiver explícito junto à âncora, fica ausente."""
+    m = _RE_PRORROGACAO_PRAZO_MESES.search(texto or "")
+    if not m:
+        return ResultadoCampo.nao_encontrado("prazo de prorrogação não localizado")
+    return ResultadoCampo(int(m.group(1)), CONF_ALTA)

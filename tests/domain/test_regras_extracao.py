@@ -17,7 +17,13 @@ from decimal import Decimal
 import pytest
 
 from contract_parser.domain import regras_extracao as R
-from contract_parser.domain.contrato import ModalidadeGarantia, TipoLocacao, TipoParte
+from contract_parser.domain.contrato import (
+    ModalidadeGarantia,
+    ResponsavelDespesa,
+    TipoDespesa,
+    TipoLocacao,
+    TipoParte,
+)
 from contract_parser.domain.regras_extracao import CONF_ALTA, CONF_BAIXA, CONF_MEDIA
 
 
@@ -381,3 +387,94 @@ def test_reajuste_automatico_nao_mencionado_marca_revisao():
 def test_proximo_reajuste():
     res = R.extrair_proximo_reajuste("próximo reajuste em 03/2025")
     assert res.valor == "2025-03-01"
+
+
+# --------------------------------------------------------------------------- #
+# Despesas contratuais (tipo -> responsável, por proximidade textual)
+# --------------------------------------------------------------------------- #
+def test_despesa_iptu_responsavel_locatario():
+    res = R.extrair_despesas("O locatário pagará o IPTU incidente sobre o imóvel.")
+    assert res.valor == {TipoDespesa.IPTU: ResponsavelDespesa.LOCATARIO}
+    assert res.confianca == CONF_ALTA
+
+
+def test_despesa_condominio_ordinario_e_extraordinario_distintos():
+    # Caso crítico: o mesmo texto distingue ordinária/extraordinária e atribui
+    # responsáveis DIFERENTES a cada uma -> as duas devem ser detectadas, cada
+    # uma com o responsável certo (não pode colapsar num só tipo).
+    texto = (
+        "As despesas ordinárias de condomínio ficam a cargo do locatário, "
+        "enquanto as despesas extraordinárias de condomínio serão de "
+        "responsabilidade do locador."
+    )
+    res = R.extrair_despesas(texto)
+    assert res.valor == {
+        TipoDespesa.CONDOMINIO_ORDINARIO: ResponsavelDespesa.LOCATARIO,
+        TipoDespesa.CONDOMINIO_EXTRAORDINARIO: ResponsavelDespesa.LOCADOR,
+    }
+
+
+def test_despesa_seguro_incendio_responsavel_locador():
+    res = R.extrair_despesas("O seguro contra incêndio será custeado pelo locador.")
+    assert res.valor == {TipoDespesa.SEGURO_INCENDIO: ResponsavelDespesa.LOCADOR}
+
+
+def test_despesa_taxa_administracao_responsavel_locador():
+    res = R.extrair_despesas("Fica ajustada taxa de administração a ser paga pelo locador.")
+    assert res.valor == {TipoDespesa.TAXA_ADMINISTRACAO: ResponsavelDespesa.LOCADOR}
+
+
+def test_despesa_detectada_sem_responsavel_por_distancia():
+    # IPTU é mencionado, mas nenhum rótulo LOCADOR/LOCATÁRIO aparece na janela
+    # de proximidade (100 chars) ao redor do termo -> responsável fica None.
+    texto = (
+        "CLÁUSULA SÉTIMA: Fica estabelecido que o IPTU incidente sobre o imóvel, "
+        "referente ao exercício fiscal corrente, será objeto de comprovante de "
+        "pagamento anexado a este instrumento particular para fins de conferência "
+        "posterior conforme cronograma financeiro em aditivo próprio a ser "
+        "firmado supervenientemente pelas partes."
+    )
+    res = R.extrair_despesas(texto)
+    assert res.valor == {TipoDespesa.IPTU: None}
+
+
+def test_despesa_ausente():
+    assert not R.extrair_despesas("contrato sem qualquer menção a despesas").resolvido
+
+
+# --------------------------------------------------------------------------- #
+# Prorrogação/renovação automática + prazo
+# --------------------------------------------------------------------------- #
+def test_prorrogacao_automatica_com_prazo_repetido():
+    texto = (
+        "Findo o prazo contratual, este instrumento será prorrogado "
+        "automaticamente por igual período de 12 (doze) meses."
+    )
+    auto = R.extrair_prorrogacao_automatica(texto)
+    assert auto.valor is True
+    assert auto.confianca == CONF_ALTA
+
+    prazo = R.extrair_prorrogacao_prazo_meses(texto)
+    assert prazo.valor == 12
+    assert prazo.confianca == CONF_ALTA
+
+
+def test_prorrogacao_automatica_prazo_indeterminado_sem_numero():
+    texto = "O contrato prorrogar-se-á automaticamente por prazo indeterminado."
+    assert R.extrair_prorrogacao_automatica(texto).valor is True
+    assert not R.extrair_prorrogacao_prazo_meses(texto).resolvido
+
+
+def test_prorrogacao_automatica_sem_repetir_numero_nao_infere():
+    # REGRESSÃO de design: "igual período" sem repetir o número NÃO pode ser
+    # inferido a partir do prazo original do contrato (a função nem o recebe).
+    texto = "Findo o prazo, o contrato será prorrogado automaticamente por igual período."
+    assert R.extrair_prorrogacao_automatica(texto).valor is True
+    assert not R.extrair_prorrogacao_prazo_meses(texto).resolvido
+
+
+def test_prorrogacao_automatica_nao_mencionada_marca_revisao():
+    res = R.extrair_prorrogacao_automatica("o aluguel será corrigido pelo IPCA")
+    assert res.valor is False
+    assert res.confianca == CONF_BAIXA
+    assert not R.extrair_prorrogacao_prazo_meses("o aluguel será corrigido pelo IPCA").resolvido

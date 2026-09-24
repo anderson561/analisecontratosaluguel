@@ -19,7 +19,13 @@ from decimal import Decimal
 import pytest
 
 from contract_parser.application.contract_extraction_service import ExtratorContrato
-from contract_parser.domain.contrato import OrigemExtracao, TipoLocacao
+from contract_parser.domain.contrato import (
+    OrigemExtracao,
+    Prorrogacao,
+    ResponsavelDespesa,
+    TipoDespesa,
+    TipoLocacao,
+)
 from contract_parser.domain.interpretador import (
     InterpretadorClausula,
     PedidoInterpretacao,
@@ -167,3 +173,45 @@ def test_interpretador_llm_real_indisponivel_por_lgpd():
     # Nenhum provedor de LLM foi definido (decisão adiada por LGPD, ADR-001):
     # não há chamada real a validar nesta fase.
     pytest.skip("Provedor de LLM não configurado (LGPD/ADR-001) — sem chamada real.")
+
+
+# --------------------------------------------------------------------------- #
+# Despesas e Prorrogação (Fase 3 — conecta os extratores da Fase 2 ao
+# orquestrador; nenhuma mudança em persistência/relatório/GUI aqui).
+# --------------------------------------------------------------------------- #
+TEXTO_DESPESA_E_PRORROGACAO = (
+    "O locatário pagará o IPTU incidente sobre o imóvel.\n"
+    "Findo o prazo, o contrato será prorrogado automaticamente por igual "
+    "período de 12 meses."
+)
+
+
+def test_despesas_e_prorrogacao_resolvidas_pela_regra():
+    contrato = ExtratorContrato().extrair(TEXTO_DESPESA_E_PRORROGACAO)
+
+    assert contrato.despesas == {TipoDespesa.IPTU: ResponsavelDespesa.LOCATARIO}
+    assert contrato.prorrogacao == Prorrogacao(automatica=True, prazo_meses=12)
+
+
+def test_memoria_registra_proveniencia_de_despesas_e_prorrogacao():
+    contrato = ExtratorContrato().extrair(TEXTO_DESPESA_E_PRORROGACAO)
+    memoria = contrato.memoria_extracao
+
+    assert memoria["despesas"].origem == OrigemExtracao.REGRA
+    assert memoria["despesas"].confianca == pytest.approx(0.9)
+    assert not memoria["despesas"].necessita_revisao
+
+    assert memoria["prorrogacao_automatica"].origem == OrigemExtracao.REGRA
+    assert memoria["prorrogacao_automatica"].confianca == pytest.approx(0.9)
+    assert not memoria["prorrogacao_automatica"].necessita_revisao
+
+    assert memoria["prorrogacao_prazo_meses"].origem == OrigemExtracao.REGRA
+    assert memoria["prorrogacao_prazo_meses"].confianca == pytest.approx(0.9)
+    assert not memoria["prorrogacao_prazo_meses"].necessita_revisao
+
+
+def test_sem_despesa_ou_prorrogacao_usa_defaults_sem_quebrar():
+    contrato = ExtratorContrato().extrair(TEXTO_RESIDENCIAL)
+
+    assert contrato.despesas == {}
+    assert contrato.prorrogacao == Prorrogacao()

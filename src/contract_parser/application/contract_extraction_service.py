@@ -18,6 +18,7 @@ from contract_parser.domain import regras_extracao as regras
 from contract_parser.domain.contrato import (
     Contrato,
     OrigemExtracao,
+    Prorrogacao,
     Reajuste,
     RegistroCampo,
     TipoLocacao,
@@ -72,6 +73,9 @@ class ExtratorContrato:
         )
 
         reajuste = self._montar_reajuste(memoria, texto)
+        prorrogacao = self._montar_prorrogacao(memoria, texto)
+
+        despesas = self._registrar(memoria, "despesas", regras.extrair_despesas(texto))
 
         # Campo AMBÍGUO: regra primeiro; só recorre ao interpretador (LLM) se a
         # regra não resolver com confiança suficiente.
@@ -97,6 +101,8 @@ class ExtratorContrato:
             prazo_meses=prazo,
             dia_vencimento_mensal=dia_venc,
             reajuste=reajuste,
+            despesas=despesas or {},
+            prorrogacao=prorrogacao,
             flags=flags,
             memoria_extracao=memoria,
         )
@@ -138,6 +144,15 @@ class ExtratorContrato:
             proximo_reajuste=proximo,
             automatico=bool(automatico),
         )
+
+    def _montar_prorrogacao(self, memoria: dict[str, RegistroCampo], texto: str) -> Prorrogacao:
+        automatica = self._registrar(
+            memoria, "prorrogacao_automatica", regras.extrair_prorrogacao_automatica(texto)
+        )
+        prazo = self._registrar(
+            memoria, "prorrogacao_prazo_meses", regras.extrair_prorrogacao_prazo_meses(texto)
+        )
+        return Prorrogacao(automatica=bool(automatica), prazo_meses=prazo)
 
     def _resolver_tipo_locacao(
         self, memoria: dict[str, RegistroCampo], texto: str

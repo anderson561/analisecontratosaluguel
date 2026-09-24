@@ -23,6 +23,8 @@ from contract_parser.domain.contrato import (
     Parte,
     Reajuste,
     RegistroCampo,
+    ResponsavelDespesa,
+    TipoDespesa,
     TipoLocacao,
     TipoParte,
 )
@@ -116,6 +118,13 @@ def _linha_rica() -> LinhaContrato:
         indice="IPCA",
         proximo_reajuste="10/2026",
         reajuste_automatico=True,
+        despesas={
+            TipoDespesa.IPTU: ResponsavelDespesa.LOCADOR,
+            TipoDespesa.CONDOMINIO_ORDINARIO: ResponsavelDespesa.LOCATARIO,
+            TipoDespesa.OUTRAS: None,
+        },
+        prorrogacao_automatica=True,
+        prorrogacao_prazo_meses=12,
         vencimento=date(2028, 10, 10),
     )
 
@@ -130,6 +139,9 @@ def _linha_pobre() -> LinhaContrato:
         indice=None,
         proximo_reajuste=None,
         reajuste_automatico=False,
+        despesas={},
+        prorrogacao_automatica=False,
+        prorrogacao_prazo_meses=None,
         vencimento=None,
     )
 
@@ -193,6 +205,44 @@ def test_roundtrip_fiel_contrato_pobre(repo):
     assert obtido.contrato == contrato
     assert obtido.linha == linha
     assert obtido.linha.irrf is None
+
+
+def test_roundtrip_preserva_despesas_com_multiplas_entradas_e_responsavel_none(repo):
+    """Despesas (dict[TipoDespesa, ResponsavelDespesa | None]) sobrevivem ao
+    round-trip JSON, incluindo uma entrada com responsável ausente (None)."""
+    repo.salvar(
+        arquivo_nome="contrato_alpha.pdf",
+        arquivo_hash="hash-alpha",
+        contrato=_contrato_rico(),
+        linha=_linha_rica(),
+        revisao=True,
+    )
+    obtido = repo.buscar_por_hash("hash-alpha")
+
+    assert obtido.linha.despesas == {
+        TipoDespesa.IPTU: ResponsavelDespesa.LOCADOR,
+        TipoDespesa.CONDOMINIO_ORDINARIO: ResponsavelDespesa.LOCATARIO,
+        TipoDespesa.OUTRAS: None,
+    }
+    assert obtido.linha.prorrogacao_automatica is True
+    assert obtido.linha.prorrogacao_prazo_meses == 12
+
+
+def test_roundtrip_preserva_despesas_vazias_e_prorrogacao_default(repo):
+    """Caso default: despesas={} (dict vazio) e prorrogacao automatica=False/
+    prazo=None não quebram o round-trip."""
+    repo.salvar(
+        arquivo_nome="contrato_pobre.pdf",
+        arquivo_hash="hash-pobre",
+        contrato=_contrato_pobre(),
+        linha=_linha_pobre(),
+        revisao=False,
+    )
+    obtido = repo.buscar_por_hash("hash-pobre")
+
+    assert obtido.linha.despesas == {}
+    assert obtido.linha.prorrogacao_automatica is False
+    assert obtido.linha.prorrogacao_prazo_meses is None
 
 
 def test_buscar_por_hash_ausente_retorna_none(repo):

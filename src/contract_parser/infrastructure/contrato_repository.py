@@ -21,7 +21,7 @@ import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-from contract_parser.domain.contrato import Contrato
+from contract_parser.domain.contrato import Contrato, ResponsavelDespesa, TipoDespesa
 from contract_parser.domain.irrf import ResultadoIRRF
 from contract_parser.domain.registro_contrato import RegistroContrato
 from contract_parser.domain.relatorio import LinhaContrato
@@ -46,6 +46,15 @@ def _linha_para_dict(linha: LinhaContrato) -> dict:
         "indice": linha.indice,
         "proximo_reajuste": linha.proximo_reajuste,
         "reajuste_automatico": linha.reajuste_automatico,
+        # dict com chave Enum: json.dumps não serializa Enum como chave sem
+        # conversão explícita para str — convertemos tipo/responsável para
+        # ``.value`` aqui e reidratamos de volta em _dict_para_linha.
+        "despesas": {
+            tipo.value: (resp.value if resp is not None else None)
+            for tipo, resp in linha.despesas.items()
+        },
+        "prorrogacao_automatica": linha.prorrogacao_automatica,
+        "prorrogacao_prazo_meses": linha.prorrogacao_prazo_meses,
         "vencimento": linha.vencimento.isoformat() if linha.vencimento is not None else None,
     }
 
@@ -64,6 +73,15 @@ def _dict_para_linha(dados: dict) -> LinhaContrato:
         indice=dados["indice"],
         proximo_reajuste=dados["proximo_reajuste"],
         reajuste_automatico=dados["reajuste_automatico"],
+        # Acesso direto (sem .get): init_schema não versiona migração (YAGNI,
+        # ADR-002) e não há base de produção com linha_json antigo para
+        # migrar — mesma convenção dos demais campos acima.
+        despesas={
+            TipoDespesa(k): (ResponsavelDespesa(v) if v is not None else None)
+            for k, v in dados["despesas"].items()
+        },
+        prorrogacao_automatica=dados["prorrogacao_automatica"],
+        prorrogacao_prazo_meses=dados["prorrogacao_prazo_meses"],
         vencimento=date.fromisoformat(vencimento) if vencimento is not None else None,
     )
 

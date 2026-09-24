@@ -23,6 +23,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from contract_parser.domain.contrato import ResponsavelDespesa, TipoDespesa
 from contract_parser.domain.irrf import ResultadoIRRF
 
 _ZERO = Decimal("0.00")
@@ -45,6 +46,9 @@ class LinhaContrato:
     indice: str | None
     proximo_reajuste: str | None
     reajuste_automatico: bool
+    despesas: dict[TipoDespesa, ResponsavelDespesa | None]
+    prorrogacao_automatica: bool
+    prorrogacao_prazo_meses: int | None
     vencimento: date | None  # data_fim_vigencia (§4: "Vencimento" = fim da vigência)
 
     @property

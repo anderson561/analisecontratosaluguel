@@ -47,6 +47,9 @@ def _relatorio() -> Relatorio:
             indice="IPCA",
             proximo_reajuste="10/2026",
             reajuste_automatico=True,
+            despesas={},
+            prorrogacao_automatica=False,
+            prorrogacao_prazo_meses=None,
             vencimento=date(2028, 10, 10),
         ),
         LinhaContrato(
@@ -58,6 +61,9 @@ def _relatorio() -> Relatorio:
             indice="IGP-M",
             proximo_reajuste="05/2026",
             reajuste_automatico=False,
+            despesas={},
+            prorrogacao_automatica=False,
+            prorrogacao_prazo_meses=None,
             vencimento=date(2027, 5, 1),
         ),
     ]

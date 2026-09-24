@@ -74,6 +74,9 @@ class RelatorioService:
             indice=contrato.reajuste.indice,
             proximo_reajuste=contrato.reajuste.proximo_reajuste,
             reajuste_automatico=contrato.reajuste.automatico,
+            despesas=contrato.despesas,
+            prorrogacao_automatica=contrato.prorrogacao.automatica,
+            prorrogacao_prazo_meses=contrato.prorrogacao.prazo_meses,
             vencimento=contrato.data_fim_vigencia,
         )
 

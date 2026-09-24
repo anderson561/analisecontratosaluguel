@@ -45,6 +45,24 @@ class ModalidadeGarantia(str, Enum):
     CESSAO_FIDUCIARIA = "cessao_fiduciaria"
 
 
+class TipoDespesa(str, Enum):
+    """Tipos de despesa contratual sujeitos a rateio entre locador/locatário."""
+
+    IPTU = "iptu"
+    CONDOMINIO_ORDINARIO = "condominio_ordinario"
+    CONDOMINIO_EXTRAORDINARIO = "condominio_extraordinario"
+    SEGURO_INCENDIO = "seguro_incendio"
+    TAXA_ADMINISTRACAO = "taxa_administracao"
+    OUTRAS = "outras"
+
+
+class ResponsavelDespesa(str, Enum):
+    """Parte responsável pelo pagamento de uma despesa contratual."""
+
+    LOCADOR = "locador"
+    LOCATARIO = "locatario"
+
+
 class OrigemExtracao(str, Enum):
     """De onde veio o valor de um campo (memória de extração, D1 híbrido)."""
 
@@ -72,6 +90,15 @@ class Reajuste(BaseModel):
     periodicidade_meses: int | None = None
     proximo_reajuste: str | None = None  # ISO (aaaa-mm-dd) ou "mm/aaaa"
     automatico: bool = False
+
+
+class Prorrogacao(BaseModel):
+    """Cláusula de prorrogação/renovação: existência automática + prazo, quando explícito."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    automatica: bool = False
+    prazo_meses: int | None = None
 
 
 class FlagsJuridicas(BaseModel):
@@ -137,6 +164,12 @@ class Contrato(BaseModel):
 
     # Reajuste
     reajuste: Reajuste = Field(default_factory=Reajuste)
+
+    # Despesas: tipo de despesa -> parte responsável (None = detectada, sem responsável identificado)
+    despesas: dict[TipoDespesa, ResponsavelDespesa | None] = Field(default_factory=dict)
+
+    # Prorrogação/renovação
+    prorrogacao: Prorrogacao = Field(default_factory=Prorrogacao)
 
     # Risco jurídico
     flags: FlagsJuridicas = Field(default_factory=FlagsJuridicas)

@@ -22,7 +22,7 @@ from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
-from contract_parser.domain.contrato import ResponsavelDespesa, TipoDespesa
+from contract_parser.domain.contrato import Parte, ResponsavelDespesa, TipoDespesa
 from contract_parser.domain.relatorio import (
     LinhaContrato,
     Relatorio,
@@ -44,7 +44,18 @@ CABECALHOS_CONTRATOS = [
     "Vencimento",
     "Despesas",
     "Prorrogação",
+    "Locador(es) Adicional(is)",
 ]
+
+# Larguras (em pontos) da tabela de contratos do PDF, uma por cabeçalho — a
+# soma cabe na área útil da página A4 paisagem (larguras de coluna fixas são
+# OBRIGATÓRIAS aqui: sem elas o reportlab dimensiona cada coluna pelo texto
+# mais largo, e com 13 colunas a soma passa da largura da página, fazendo o
+# conteúdo que ultrapassa a borda ser descartado do PDF — não é só um recorte
+# visual). Os cabeçalhos mais longos quebram em duas linhas (célula com
+# ``Paragraph``); os dados (mais curtos) cabem numa linha só.
+_LARGURAS_COLUNAS_CONTRATOS = [88, 63, 88, 54, 48, 58, 39, 54, 46, 54, 72, 58, 63]
+assert len(_LARGURAS_COLUNAS_CONTRATOS) == len(CABECALHOS_CONTRATOS)
 
 _VAZIO = ""  # célula em branco para dado ausente (revisão manual)
 
@@ -127,6 +138,16 @@ def formatar_prorrogacao(automatica: bool, prazo_meses: int | None) -> str:
     return "Sim"
 
 
+def formatar_locadores_adicionais(locadores: tuple[Parte, ...]) -> str:
+    """Nomes dos locadores ADEM do principal, separados por ``"; "`` (vazio se
+    não houver nenhum). Uma ``Parte`` sem nome usa o texto de fallback
+    ``"(sem nome identificado)"``.
+    """
+    if not locadores:
+        return _VAZIO
+    return "; ".join(p.nome or "(sem nome identificado)" for p in locadores)
+
+
 def linha_para_celulas(linha: LinhaContrato) -> list[str]:
     """Converte uma :class:`LinhaContrato` na sequência de células apresentáveis."""
     return [
@@ -142,6 +163,7 @@ def linha_para_celulas(linha: LinhaContrato) -> list[str]:
         formatar_data_br(linha.vencimento),
         formatar_despesas(linha.despesas),
         formatar_prorrogacao(linha.prorrogacao_automatica, linha.prorrogacao_prazo_meses),
+        formatar_locadores_adicionais(linha.locadores_adicionais),
     ]
 
 
@@ -226,41 +248,55 @@ class PdfRelatorioExporter:
     """Exporta o relatório para ``.pdf`` (reportlab, import lazy)."""
 
     def _tabela_contratos(self, contratos: RelatorioContratos):
+        from xml.sax.saxutils import escape
+
         from reportlab.lib import colors
-        from reportlab.platypus import Table, TableStyle
+        from reportlab.lib.styles import ParagraphStyle
+        from reportlab.platypus import Paragraph, Table, TableStyle
 
-        dados = [CABECALHOS_CONTRATOS]
-        for linha in contratos.linhas:
-            dados.append(linha_para_celulas(linha))
-        dados.append(
-            [
-                "TOTAL",
-                "",
-                "",
-                "",
-                formatar_moeda_brl(contratos.total_irrf_retido),
-                formatar_moeda_brl(contratos.total_reducao_irrf),
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-            ]
+        # Células viram Paragraph (em vez de string crua) para poder QUEBRAR
+        # LINHA — necessário porque as larguras fixas de coluna (acima) são
+        # mais estreitas que alguns cabeçalhos por inteiro numa linha só.
+        estilo_cabecalho = ParagraphStyle(
+            "CabecalhoContrato", fontName="Helvetica-Bold", fontSize=7, leading=8,
+            textColor=colors.white,
         )
+        estilo_celula = ParagraphStyle("CelulaContrato", fontName="Helvetica", fontSize=7, leading=8)
+        estilo_total = ParagraphStyle("TotalContrato", fontName="Helvetica-Bold", fontSize=7, leading=8)
 
-        tabela = Table(dados, repeatRows=1)
+        def _celula(texto: str, estilo: ParagraphStyle) -> Paragraph:
+            return Paragraph(escape(texto), estilo)
+
+        dados = [[_celula(c, estilo_cabecalho) for c in CABECALHOS_CONTRATOS]]
+        for linha in contratos.linhas:
+            dados.append([_celula(c, estilo_celula) for c in linha_para_celulas(linha)])
+        linha_total = [
+            "TOTAL",
+            "",
+            "",
+            "",
+            formatar_moeda_brl(contratos.total_irrf_retido),
+            formatar_moeda_brl(contratos.total_reducao_irrf),
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+        ]
+        dados.append([_celula(c, estilo_total) for c in linha_total])
+
+        tabela = Table(dados, colWidths=_LARGURAS_COLUNAS_CONTRATOS, repeatRows=1)
         tabela.setStyle(
             TableStyle(
                 [
                     ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F3864")),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("FONTSIZE", (0, 0), (-1, -1), 7),
                     ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
                     ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#F2F2F2")]),
-                    ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
                     ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 3),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 3),
                 ]
             )
         )
@@ -320,6 +356,12 @@ class PdfRelatorioExporter:
             str(destino),
             pagesize=landscape(A4),
             title="Relatório de Contratos de Locação",
+            # Margens laterais reduzidas: a tabela de contratos tem 13
+            # colunas de largura fixa (``_LARGURAS_COLUNAS_CONTRATOS``) e
+            # precisa da área útil máxima da página para caber sem cortar
+            # conteúdo (ver comentário da constante).
+            leftMargin=28,
+            rightMargin=28,
         )
         flowables = [
             Paragraph("Relatório de Contratos de Locação", estilos["Title"]),

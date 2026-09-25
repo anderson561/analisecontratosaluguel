@@ -10,7 +10,7 @@ from decimal import Decimal
 
 import pytest
 
-from contract_parser.domain.contrato import ResponsavelDespesa, TipoDespesa, TipoParte
+from contract_parser.domain.contrato import Parte, ResponsavelDespesa, TipoDespesa, TipoParte
 from contract_parser.domain.irrf import calcular_irrf, tabela_irrf_2026
 from contract_parser.domain.relatorio import (
     LinhaContrato,
@@ -24,10 +24,13 @@ from contract_parser.infrastructure.report_exporters import (
     PdfRelatorioExporter,
     formatar_data_br,
     formatar_despesas,
+    formatar_locadores_adicionais,
     formatar_moeda_brl,
     formatar_prorrogacao,
     linha_para_celulas,
 )
+
+NOME_LOCADOR_ADICIONAL = "Fulano de Tal"
 
 PENDENCIA = "Contrato da Empresa Gamma Holding SA / 00000000000388 não encontrado"
 
@@ -45,7 +48,9 @@ def _relatorio() -> Relatorio:
             locatario_nome="Alpha Comercio LTDA",
             locatario_cnpj="00000000000159",
             locador_nome="João da Silva",
-            locadores_adicionais=(),
+            locadores_adicionais=(
+                Parte(tipo=TipoParte.PF, nome=NOME_LOCADOR_ADICIONAL, documento="00000000000"),
+            ),
             valor_aluguel=Decimal("5000.00"),
             irrf=irrf_pf,
             indice="IPCA",
@@ -145,12 +150,39 @@ def test_formatar_prorrogacao(automatica, prazo_meses, esperado):
     assert formatar_prorrogacao(automatica, prazo_meses) == esperado
 
 
+def test_formatar_locadores_adicionais_vazio():
+    assert formatar_locadores_adicionais(()) == ""
+
+
+def test_formatar_locadores_adicionais_um_item():
+    locadores = (Parte(tipo=TipoParte.PF, nome="Fulano de Tal", documento="00000000000"),)
+    assert formatar_locadores_adicionais(locadores) == "Fulano de Tal"
+
+
+def test_formatar_locadores_adicionais_multiplos_itens_na_ordem_da_tupla():
+    locadores = (
+        Parte(tipo=TipoParte.PF, nome="Fulano de Tal", documento="00000000000"),
+        Parte(tipo=TipoParte.PJ, nome="Beltrano Empreendimentos LTDA", documento="00000000000191"),
+    )
+    assert (
+        formatar_locadores_adicionais(locadores)
+        == "Fulano de Tal; Beltrano Empreendimentos LTDA"
+    )
+
+
+def test_formatar_locadores_adicionais_sem_nome_usa_fallback():
+    locadores = (Parte(tipo=TipoParte.PF, nome=None, documento="00000000000"),)
+    assert formatar_locadores_adicionais(locadores) == "(sem nome identificado)"
+
+
 def test_linha_para_celulas_inclui_despesas_e_prorrogacao_no_final():
     linha = LinhaContrato(
         locatario_nome="Alpha Comercio LTDA",
         locatario_cnpj="00000000000159",
         locador_nome="João da Silva",
-        locadores_adicionais=(),
+        locadores_adicionais=(
+            Parte(tipo=TipoParte.PF, nome=NOME_LOCADOR_ADICIONAL, documento="00000000000"),
+        ),
         valor_aluguel=Decimal("5000.00"),
         irrf=None,
         indice="IPCA",
@@ -162,9 +194,10 @@ def test_linha_para_celulas_inclui_despesas_e_prorrogacao_no_final():
         vencimento=date(2028, 10, 10),
     )
     celulas = linha_para_celulas(linha)
-    assert len(celulas) == 12
+    assert len(celulas) == 13
     assert celulas[10] == "IPTU: Locatário"
     assert celulas[11] == "Sim (12 meses)"
+    assert celulas[12] == NOME_LOCADOR_ADICIONAL
 
 
 # --------------------------------------------------------------------------- #
@@ -198,6 +231,8 @@ def test_excel_gera_duas_abas_com_cabecalhos_e_valores(tmp_path):
     # Colunas novas (Despesas/Prorrogação) da linha Alpha.
     assert contratos["K2"].value == "IPTU: Locatário"
     assert contratos["L2"].value == "Sim (12 meses)"
+    # Coluna nova: locador adicional da linha Alpha.
+    assert contratos["M2"].value == NOME_LOCADOR_ADICIONAL
     # Locador PJ ⇒ IRRF R$ 0,00 e nenhuma redução.
     assert contratos["E3"].value == "R$ 0,00"
     assert contratos["F3"].value == "R$ 0,00"
@@ -205,6 +240,7 @@ def test_excel_gera_duas_abas_com_cabecalhos_e_valores(tmp_path):
     # vazia como cela em branco, que volta como None na releitura).
     assert contratos["K3"].value is None
     assert contratos["L3"].value == "Não"
+    assert contratos["M3"].value is None
 
     # Rodapé: total de IRRF retido (0,00 + 0,00) e total de redução (312,89 + 0,00).
     linhas_valores = list(contratos.iter_rows(values_only=True))
@@ -259,6 +295,7 @@ def test_pdf_gera_arquivo_nao_trivial_com_texto_esperado(tmp_path):
     # Colunas novas: despesas e prorrogação da linha Alpha.
     assert "Locatário" in texto
     assert "12 meses)" in texto
+    assert NOME_LOCADOR_ADICIONAL in texto
     assert PENDENCIA in texto
 
 

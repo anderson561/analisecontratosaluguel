@@ -19,6 +19,7 @@ import pytest
 from contract_parser.domain import regras_extracao as R
 from contract_parser.domain.contrato import (
     ModalidadeGarantia,
+    Parte,
     ResponsavelDespesa,
     TipoDespesa,
     TipoLocacao,
@@ -119,6 +120,70 @@ def test_parte_narrativa_como_locador_deduz_pj_por_cnpj():
     assert lct.valor.tipo == TipoParte.PJ
     assert lct.valor.nome == "BETA CONSTRUTORA LTDA"
     assert lct.valor.documento == "33555666000165"
+
+
+# --------------------------------------------------------------------------- #
+# Locadores adicionais (Plano A, Fase 2) — múltiplos blocos "LOCADOR:" no
+# quadro rotulado, sem "LOCATÁRIO:" entre eles (co-proprietários PF).
+# --------------------------------------------------------------------------- #
+def test_locadores_adicionais_dois_blocos_sem_locatario_entre_eles():
+    # Bug real: duas pessoas físicas co-proprietárias, dois blocos "LOCADOR:"
+    # separados por parágrafo em branco, SEM "LOCATÁRIO:" entre eles.
+    # extrair_locador (regex.search) só acha o PRIMEIRO -> FULANO.
+    texto = (
+        "LOCADOR: FULANO DE TAL, brasileiro, Casado, Empresário, portador do CPF nº "
+        "111.111.111-11,\nRG nº 11111111, residente e domiciliado na Rua Exemplo nº 100, "
+        "Cidade/UF, doravante\ndenominado simplesmente LOCADOR.\n\n"
+        "LOCADOR: BELTRANA DA SILVA, brasileira, Empresária, portador do CPF nº "
+        "222.222.222-22,\nRG nº 22222222, residente e domiciliada na Rua Exemplo nº 100, "
+        "Cidade/UF, doravante\ndenominado simplesmente LOCADOR.\n\n"
+        "LOCATÁRIO: EMPRESA EXEMPLO LTDA, CNPJ nº 12.345.678/0001-99.\n\n"
+    )
+    principal = R.extrair_locador(texto)
+    assert principal.valor.nome == "FULANO DE TAL"
+    assert principal.valor.documento == "11111111111"
+
+    adicionais = R.extrair_locadores_adicionais(texto, locador_principal=principal.valor)
+    assert adicionais.resolvido
+    assert len(adicionais.valor) == 1
+    assert adicionais.valor[0].documento == "22222222222"
+    assert "BELTRANA DA SILVA" in adicionais.valor[0].nome
+
+
+def test_locadores_adicionais_contrato_normal_um_so_locador_nao_encontrado():
+    # Um só bloco "LOCADOR:" -> é o próprio principal, descartado por
+    # equivalência de valor; lista fica vazia.
+    texto = (
+        "LOCADOR: FULANO DE TAL, brasileiro, CPF nº 111.111.111-11.\n\n"
+        "LOCATÁRIO: EMPRESA EXEMPLO LTDA, CNPJ nº 12.345.678/0001-99.\n\n"
+    )
+    principal = R.extrair_locador(texto)
+    res = R.extrair_locadores_adicionais(texto, locador_principal=principal.valor)
+    assert not res.resolvido
+    assert res.valor is None
+
+
+def test_locadores_adicionais_bloco_duplicado_dedupe_interno():
+    # Três blocos "LOCADOR:": o principal + a MESMA pessoa adicional repetida
+    # duas vezes (mesmo CPF, ex. artefato de OCR) -> só UM item na lista.
+    texto = (
+        "LOCADOR: FULANO DE TAL, brasileiro, CPF nº 111.111.111-11.\n\n"
+        "LOCADOR: BELTRANA DA SILVA, brasileira, CPF nº 222.222.222-22.\n\n"
+        "LOCADOR: BELTRANA DA SILVA, brasileira, CPF nº 222.222.222-22.\n\n"
+        "LOCATÁRIO: EMPRESA EXEMPLO LTDA, CNPJ nº 12.345.678/0001-99.\n\n"
+    )
+    principal = R.extrair_locador(texto)
+    res = R.extrair_locadores_adicionais(texto, locador_principal=principal.valor)
+    assert res.resolvido
+    assert len(res.valor) == 1
+    assert res.valor[0].documento == "22222222222"
+
+
+@pytest.mark.parametrize("texto", ["documento sem partes rotuladas", ""])
+def test_locadores_adicionais_sem_locador_no_texto_nao_encontrado(texto):
+    res = R.extrair_locadores_adicionais(texto, locador_principal=Parte())
+    assert not res.resolvido
+    assert res.valor is None
 
 
 # --------------------------------------------------------------------------- #

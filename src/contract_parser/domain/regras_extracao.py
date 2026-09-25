@@ -213,6 +213,64 @@ def extrair_locatario(texto: str) -> ResultadoCampo[Parte]:
     return _extrair_parte(texto, _RE_LOCATARIO, _RAIZ_LOCATARIO, _RAIZ_LOCADOR, "LOCATÁRIO")
 
 
+def _normalizar_nome_parte(nome: str) -> str:
+    return re.sub(r"\s+", " ", nome).strip().casefold()
+
+
+def _partes_equivalentes(a: Parte, b: Parte) -> bool:
+    """Compara duas ``Parte`` por VALOR (nunca por posição no texto).
+
+    Documento é o critério mais forte quando ambas o têm; senão, cai para o
+    nome normalizado (espaços colapsados, case-insensitive). Sem documento nem
+    nome em comum não há como afirmar equivalência.
+    """
+    if a.documento and b.documento:
+        return a.documento == b.documento
+    if a.nome and b.nome:
+        return _normalizar_nome_parte(a.nome) == _normalizar_nome_parte(b.nome)
+    return False
+
+
+def extrair_locadores_adicionais(
+    texto: str, locador_principal: Parte
+) -> ResultadoCampo[list[Parte]]:
+    """Locadores ADICIONAIS além do ``locador_principal`` já resolvido.
+
+    Cobre o bug de dois (ou mais) blocos "LOCADOR:" rotulados separados por
+    parágrafo em branco, sem "LOCATÁRIO:" entre eles (co-proprietários pessoa
+    física) — ``extrair_locador`` só enxerga o PRIMEIRO via ``regex.search()``
+    e isso é proposital (compatibilidade total com ``Contrato.locador``/IRRF).
+
+    ``locador_principal`` é recebido como parâmetro EXPLÍCITO — não é
+    redescoberto aqui — porque pode ter vindo do fallback narrativo de
+    ``_extrair_parte`` em vez do primeiro match rotulado; descartar por
+    POSIÇÃO arriscaria apagar um locador real ou deixar passar uma duplicata
+    visual do principal. A exclusão (e a deduplicação interna da própria
+    lista) é sempre por VALOR (``_partes_equivalentes``).
+
+    Escopo deliberadamente restrito ao quadro rotulado (YAGNI): o caso
+    narrativo/prosa com múltiplos locadores fica fora, sem evidência em
+    contratos reais.
+    """
+    t = texto or ""
+    adicionais: list[Parte] = []
+    confiancas: list[float] = []
+    for m in _RE_LOCADOR.finditer(t):
+        res = _parse_parte(m.group(1))
+        if res.valor is None:
+            continue
+        if _partes_equivalentes(res.valor, locador_principal):
+            continue
+        if any(_partes_equivalentes(res.valor, existente) for existente in adicionais):
+            continue
+        adicionais.append(res.valor)
+        confiancas.append(res.confianca)
+
+    if not adicionais:
+        return ResultadoCampo.nao_encontrado("nenhum locador adicional detectado")
+    return ResultadoCampo(adicionais, min(confiancas))
+
+
 # --------------------------------------------------------------------------- #
 # Tipo de locação (residencial × comercial) — pode ser ambíguo (fallback LLM)
 # --------------------------------------------------------------------------- #

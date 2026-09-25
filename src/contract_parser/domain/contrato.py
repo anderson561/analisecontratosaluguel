@@ -144,6 +144,7 @@ class Contrato(BaseModel):
 
     # Partes
     locador: Parte = Field(default_factory=Parte)
+    locadores_adicionais: list[Parte] = Field(default_factory=list)
     locatario: Parte = Field(default_factory=Parte)
 
     # Objeto

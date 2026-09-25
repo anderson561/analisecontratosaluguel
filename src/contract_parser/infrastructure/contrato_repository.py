@@ -21,7 +21,12 @@ import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-from contract_parser.domain.contrato import Contrato, ResponsavelDespesa, TipoDespesa
+from contract_parser.domain.contrato import (
+    Contrato,
+    Parte,
+    ResponsavelDespesa,
+    TipoDespesa,
+)
 from contract_parser.domain.irrf import ResultadoIRRF
 from contract_parser.domain.registro_contrato import RegistroContrato
 from contract_parser.domain.relatorio import LinhaContrato
@@ -41,6 +46,9 @@ def _linha_para_dict(linha: LinhaContrato) -> dict:
         "locatario_nome": linha.locatario_nome,
         "locatario_cnpj": linha.locatario_cnpj,
         "locador_nome": linha.locador_nome,
+        "locadores_adicionais": [
+            p.model_dump(mode="json") for p in linha.locadores_adicionais
+        ],
         "valor_aluguel": str(linha.valor_aluguel) if linha.valor_aluguel is not None else None,
         "irrf": json.loads(linha.irrf.model_dump_json()) if linha.irrf is not None else None,
         "indice": linha.indice,
@@ -68,6 +76,9 @@ def _dict_para_linha(dados: dict) -> LinhaContrato:
         locatario_nome=dados["locatario_nome"],
         locatario_cnpj=dados["locatario_cnpj"],
         locador_nome=dados["locador_nome"],
+        locadores_adicionais=tuple(
+            Parte.model_validate(item) for item in dados["locadores_adicionais"]
+        ),
         valor_aluguel=Decimal(valor_aluguel) if valor_aluguel is not None else None,
         irrf=ResultadoIRRF.model_validate(dados["irrf"]) if dados["irrf"] is not None else None,
         indice=dados["indice"],

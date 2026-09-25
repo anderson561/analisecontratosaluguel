@@ -69,6 +69,7 @@ class RelatorioService:
             locatario_nome=contrato.locatario.nome,
             locatario_cnpj=contrato.locatario.documento,
             locador_nome=contrato.locador.nome,
+            locadores_adicionais=tuple(contrato.locadores_adicionais),
             valor_aluguel=valor,
             irrf=irrf,
             indice=contrato.reajuste.indice,

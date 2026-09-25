@@ -23,7 +23,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from contract_parser.domain.contrato import ResponsavelDespesa, TipoDespesa
+from contract_parser.domain.contrato import Parte, ResponsavelDespesa, TipoDespesa
 from contract_parser.domain.irrf import ResultadoIRRF
 
 _ZERO = Decimal("0.00")
@@ -41,6 +41,7 @@ class LinhaContrato:
     locatario_nome: str | None
     locatario_cnpj: str | None
     locador_nome: str | None
+    locadores_adicionais: tuple[Parte, ...]
     valor_aluguel: Decimal | None
     irrf: ResultadoIRRF | None
     indice: str | None

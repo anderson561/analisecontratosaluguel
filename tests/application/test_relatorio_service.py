@@ -212,6 +212,28 @@ def test_relatorio01_linha_prorrogacao_default_quando_contrato_nao_informa():
     assert linha.prorrogacao_prazo_meses is None
 
 
+def test_relatorio01_linha_leva_locadores_adicionais_do_contrato():
+    """Passthrough: locadores_adicionais do Contrato vão crus para a linha."""
+    locadores_adicionais = [
+        Parte(tipo=TipoParte.PF, nome="Maria Souza", documento="22222222222"),
+        Parte(tipo=TipoParte.PF, nome="Pedro Alves", documento="33333333333"),
+    ]
+    contrato = _contrato_pf_pj().model_copy(
+        update={"locadores_adicionais": locadores_adicionais}
+    )
+    relatorio = RelatorioService(_repo()).montar([contrato])
+    linha = relatorio.contratos.linhas[0]
+
+    assert linha.locadores_adicionais == tuple(locadores_adicionais)
+
+
+def test_relatorio01_linha_locadores_adicionais_default_vazio():
+    relatorio = RelatorioService(_repo()).montar([_contrato_pf_pj()])
+    linha = relatorio.contratos.linhas[0]
+
+    assert linha.locadores_adicionais == ()
+
+
 def test_montagem_completa_agrega_os_dois_relatorios():
     relatorio = RelatorioService(_repo()).montar([_contrato_pf_pj()])
     assert relatorio.contratos.total_contratos == 1

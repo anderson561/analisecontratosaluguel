@@ -108,11 +108,19 @@ def _contrato_pobre() -> Contrato:
     return Contrato()
 
 
+def _locadores_adicionais() -> tuple[Parte, ...]:
+    return (
+        Parte(tipo=TipoParte.PF, nome="Maria Souza", documento="22222222222"),
+        Parte(tipo=TipoParte.PF, nome="Pedro Alves", documento="33333333333"),
+    )
+
+
 def _linha_rica() -> LinhaContrato:
     return LinhaContrato(
         locatario_nome="Alpha Comercio LTDA",
         locatario_cnpj="00000000000159",
         locador_nome="João da Silva",
+        locadores_adicionais=_locadores_adicionais(),
         valor_aluguel=Decimal("5000.00"),
         irrf=_resultado_irrf(),
         indice="IPCA",
@@ -134,6 +142,7 @@ def _linha_pobre() -> LinhaContrato:
         locatario_nome=None,
         locatario_cnpj=None,
         locador_nome=None,
+        locadores_adicionais=(),
         valor_aluguel=None,
         irrf=None,
         indice=None,
@@ -226,6 +235,33 @@ def test_roundtrip_preserva_despesas_com_multiplas_entradas_e_responsavel_none(r
     }
     assert obtido.linha.prorrogacao_automatica is True
     assert obtido.linha.prorrogacao_prazo_meses == 12
+
+
+def test_roundtrip_preserva_locadores_adicionais_com_duas_partes(repo):
+    """Tupla de Parte (locadores_adicionais) sobrevive ao round-trip JSON."""
+    repo.salvar(
+        arquivo_nome="contrato_alpha.pdf",
+        arquivo_hash="hash-alpha",
+        contrato=_contrato_rico(),
+        linha=_linha_rica(),
+        revisao=True,
+    )
+    obtido = repo.buscar_por_hash("hash-alpha")
+
+    assert obtido.linha.locadores_adicionais == _locadores_adicionais()
+
+
+def test_roundtrip_preserva_locadores_adicionais_vazio(repo):
+    repo.salvar(
+        arquivo_nome="contrato_pobre.pdf",
+        arquivo_hash="hash-pobre",
+        contrato=_contrato_pobre(),
+        linha=_linha_pobre(),
+        revisao=False,
+    )
+    obtido = repo.buscar_por_hash("hash-pobre")
+
+    assert obtido.linha.locadores_adicionais == ()
 
 
 def test_roundtrip_preserva_despesas_vazias_e_prorrogacao_default(repo):

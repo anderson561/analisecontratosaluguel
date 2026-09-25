@@ -50,6 +50,11 @@ class ExtratorContrato:
         memoria: dict[str, RegistroCampo] = {}
 
         locador = self._registrar(memoria, "locador", regras.extrair_locador(texto))
+        locadores_adicionais = self._registrar(
+            memoria,
+            "locadores_adicionais",
+            regras.extrair_locadores_adicionais(texto, locador or regras.Parte()),
+        )
         locatario = self._registrar(memoria, "locatario", regras.extrair_locatario(texto))
 
         valor_aluguel = self._registrar(
@@ -91,6 +96,7 @@ class ExtratorContrato:
 
         return Contrato(
             locador=locador or regras.Parte(),
+            locadores_adicionais=locadores_adicionais or [],
             locatario=locatario or regras.Parte(),
             tipo_locacao=tipo_locacao,
             valor_aluguel=valor_aluguel,

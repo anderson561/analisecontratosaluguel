@@ -159,8 +159,11 @@ def test_locadores_adicionais_contrato_normal_um_so_locador_nao_encontrado():
     )
     principal = R.extrair_locador(texto)
     res = R.extrair_locadores_adicionais(texto, locador_principal=principal.valor)
-    assert not res.resolvido
-    assert res.valor is None
+    # Lista vazia é a resposta CONFIANTE e esperada na esmagadora maioria dos
+    # contratos (um só locador) — não é uma lacuna de extração, então não deve
+    # marcar revisão (ver decisão do PM na Fase 3 do plano).
+    assert res.valor == []
+    assert res.confianca == R.CONF_ALTA
 
 
 def test_locadores_adicionais_bloco_duplicado_dedupe_interno():
@@ -180,10 +183,13 @@ def test_locadores_adicionais_bloco_duplicado_dedupe_interno():
 
 
 @pytest.mark.parametrize("texto", ["documento sem partes rotuladas", ""])
-def test_locadores_adicionais_sem_locador_no_texto_nao_encontrado(texto):
+def test_locadores_adicionais_sem_locador_no_texto_confirma_lista_vazia(texto):
     res = R.extrair_locadores_adicionais(texto, locador_principal=Parte())
-    assert not res.resolvido
-    assert res.valor is None
+    # Idem: nenhum bloco "LOCADOR:" no texto -> lista vazia CONFIANTE, não
+    # "não encontrado" (não há campo ambíguo aqui, só ausência do padrão raro
+    # de múltiplos locadores).
+    assert res.valor == []
+    assert res.confianca == R.CONF_ALTA
 
 
 # --------------------------------------------------------------------------- #

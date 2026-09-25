@@ -21,6 +21,7 @@ import pytest
 from contract_parser.application.contract_extraction_service import ExtratorContrato
 from contract_parser.domain.contrato import (
     OrigemExtracao,
+    Parte,
     Prorrogacao,
     ResponsavelDespesa,
     TipoDespesa,
@@ -215,3 +216,39 @@ def test_sem_despesa_ou_prorrogacao_usa_defaults_sem_quebrar():
 
     assert contrato.despesas == {}
     assert contrato.prorrogacao == Prorrogacao()
+
+
+# --------------------------------------------------------------------------- #
+# Locadores adicionais (Plano A, Fase 3 — conecta extrair_locadores_adicionais
+# ao orquestrador; co-proprietários PF em blocos "LOCADOR:" repetidos).
+# --------------------------------------------------------------------------- #
+TEXTO_DOIS_LOCADORES = (
+    "LOCADOR: FULANO DE TAL, brasileiro, portador do CPF nº 111.111.111-11.\n\n"
+    "LOCADOR: BELTRANA DA SILVA, brasileira, portadora do CPF nº 222.222.222-22.\n\n"
+    "O aluguel mensal é de R$ 2.000,00."
+)
+
+
+def test_locadores_adicionais_conectados_ao_orquestrador():
+    contrato = ExtratorContrato().extrair(TEXTO_DOIS_LOCADORES)
+
+    assert contrato.locador.nome == "FULANO DE TAL"
+    assert contrato.locador.documento == "11111111111"
+    assert contrato.locadores_adicionais == [
+        Parte(tipo=contrato.locadores_adicionais[0].tipo, nome="BELTRANA DA SILVA", documento="22222222222")
+    ]
+
+
+def test_memoria_registra_proveniencia_de_locadores_adicionais():
+    contrato = ExtratorContrato().extrair(TEXTO_DOIS_LOCADORES)
+    reg = contrato.memoria_extracao["locadores_adicionais"]
+
+    assert reg.origem == OrigemExtracao.REGRA
+    assert reg.confianca == pytest.approx(0.9)
+    assert not reg.necessita_revisao
+
+
+def test_sem_locador_adicional_usa_default_lista_vazia_sem_quebrar():
+    contrato = ExtratorContrato().extrair(TEXTO_RESIDENCIAL)
+
+    assert contrato.locadores_adicionais == []

@@ -267,7 +267,7 @@ def extrair_locadores_adicionais(
         confiancas.append(res.confianca)
 
     if not adicionais:
-        return ResultadoCampo.nao_encontrado("nenhum locador adicional detectado")
+        return ResultadoCampo([], CONF_ALTA)  # confirmado: não há locador adicional
     return ResultadoCampo(adicionais, min(confiancas))
 
 

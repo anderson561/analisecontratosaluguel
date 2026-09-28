@@ -58,6 +58,7 @@ from contract_parser.infrastructure.report_exporters import (
     PdfRelatorioExporter,
     formatar_data_br,
     formatar_despesas,
+    formatar_locadores_adicionais,
     formatar_moeda_brl,
     formatar_prorrogacao,
 )
@@ -117,6 +118,7 @@ class LinhaPainel:
 
     locatario: str
     locador: str
+    locadores_adicionais: str
     valor: str
     irrf: str
     reducao_irrf: str
@@ -549,6 +551,7 @@ class RelatorioController:
         return LinhaPainel(
             locatario=linha.locatario_nome or "",
             locador=linha.locador_nome or "",
+            locadores_adicionais=formatar_locadores_adicionais(linha.locadores_adicionais),
             valor=formatar_moeda_brl(linha.valor_aluguel),
             irrf=formatar_moeda_brl(linha.irrf_retido),
             reducao_irrf=formatar_moeda_brl(linha.reducao_irrf),

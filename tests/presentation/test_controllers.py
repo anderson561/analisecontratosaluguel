@@ -486,6 +486,31 @@ def test_linhas_painel_despesas_e_prorrogacao_vazias():
     assert linha.prorrogacao == "Não"
 
 
+def test_linhas_painel_formata_locadores_adicionais():
+    """Fase 6 do plano de Múltiplos Locadores: o Painel expõe os locadores
+    ADEM do principal já formatados, reusando ``formatar_locadores_adicionais``
+    (``infrastructure/report_exporters.py``) — sem reimplementar a formatação."""
+    contrato = _contrato_pf_pj()
+    contrato = contrato.model_copy(
+        update={
+            "locadores_adicionais": [
+                Parte(tipo=TipoParte.PF, nome="Fulano de Tal", documento="00000000000")
+            ],
+        }
+    )
+    ctrl = _relatorio_controller([contrato])
+    linha = ctrl.linhas_painel()[0]
+
+    assert linha.locadores_adicionais == "Fulano de Tal"
+
+
+def test_linhas_painel_locadores_adicionais_vazio():
+    ctrl = _relatorio_controller([_contrato_pf_pj()])
+    linha = ctrl.linhas_painel()[0]
+
+    assert linha.locadores_adicionais == ""
+
+
 def test_linha_incompleta_marca_revisao():
     ctrl = _relatorio_controller([_contrato_incompleto()])
     assert ctrl.linhas_painel()[0].revisao is True

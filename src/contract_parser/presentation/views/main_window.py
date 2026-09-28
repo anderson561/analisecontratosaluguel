@@ -442,6 +442,7 @@ class MainWindow(ctk.CTk):
     _COLS_PAINEL: tuple[tuple[str, str, int], ...] = (
         ("locatario", "Locatário", 190),
         ("locador", "Locador", 190),
+        ("locadores_adicionais", "Locador(es) Adicional(is)", 190),
         ("valor", "Valor", 90),
         ("irrf", "IRRF", 90),
         ("reducao_irrf", "Redução IRRF", 120),
@@ -613,9 +614,10 @@ class MainWindow(ctk.CTk):
 
             revisao_txt = "⚠ revisar" if linha.revisao else "ok"
             valores = [
-                linha.locatario, linha.locador, linha.valor, linha.irrf, linha.reducao_irrf,
-                linha.indice, linha.proximo_reajuste, linha.automatico, linha.vencimento,
-                linha.despesas, linha.prorrogacao, revisao_txt,
+                linha.locatario, linha.locador, linha.locadores_adicionais, linha.valor,
+                linha.irrf, linha.reducao_irrf, linha.indice, linha.proximo_reajuste,
+                linha.automatico, linha.vencimento, linha.despesas, linha.prorrogacao,
+                revisao_txt,
             ]
             tree.insert("", "end", iid=iid, values=valores, tags=tags)
 

@@ -56,6 +56,7 @@ from contract_parser.infrastructure.empresa_repository import EmpresaJaExisteErr
 from contract_parser.infrastructure.report_exporters import (
     ExcelRelatorioExporter,
     PdfRelatorioExporter,
+    formatar_carencia_meses,
     formatar_data_br,
     formatar_despesas,
     formatar_locadores_adicionais,
@@ -123,9 +124,11 @@ class LinhaPainel:
     irrf: str
     reducao_irrf: str
     indice: str
+    indice_fonte: str
     proximo_reajuste: str
     automatico: str
     vencimento: str
+    carencia: str
     despesas: str
     prorrogacao: str
     revisao: bool
@@ -556,9 +559,11 @@ class RelatorioController:
             irrf=formatar_moeda_brl(linha.irrf_retido),
             reducao_irrf=formatar_moeda_brl(linha.reducao_irrf),
             indice=linha.indice or "",
+            indice_fonte=linha.indice_fonte or "",
             proximo_reajuste=linha.proximo_reajuste or "",
             automatico=_sim_nao(linha.reajuste_automatico),
             vencimento=formatar_data_br(linha.vencimento),
+            carencia=formatar_carencia_meses(linha.carencia_meses),
             despesas=formatar_despesas(linha.despesas),
             prorrogacao=formatar_prorrogacao(
                 linha.prorrogacao_automatica, linha.prorrogacao_prazo_meses

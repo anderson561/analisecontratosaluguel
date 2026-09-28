@@ -447,9 +447,11 @@ class MainWindow(ctk.CTk):
         ("irrf", "IRRF", 90),
         ("reducao_irrf", "Redução IRRF", 120),
         ("indice", "Índice", 70),
+        ("indice_fonte", "Fonte do Índice", 100),
         ("proximo_reajuste", "Próx. Reajuste", 135),
         ("automatico", "Auto?", 60),
         ("vencimento", "Vencimento", 120),
+        ("carencia", "Carência", 90),
         ("despesas", "Despesas", 170),
         ("prorrogacao", "Prorrogação", 130),
         ("revisao", "Revisão", 90),
@@ -615,9 +617,9 @@ class MainWindow(ctk.CTk):
             revisao_txt = "⚠ revisar" if linha.revisao else "ok"
             valores = [
                 linha.locatario, linha.locador, linha.locadores_adicionais, linha.valor,
-                linha.irrf, linha.reducao_irrf, linha.indice, linha.proximo_reajuste,
-                linha.automatico, linha.vencimento, linha.despesas, linha.prorrogacao,
-                revisao_txt,
+                linha.irrf, linha.reducao_irrf, linha.indice, linha.indice_fonte,
+                linha.proximo_reajuste, linha.automatico, linha.vencimento, linha.carencia,
+                linha.despesas, linha.prorrogacao, revisao_txt,
             ]
             tree.insert("", "end", iid=iid, values=valores, tags=tags)
 

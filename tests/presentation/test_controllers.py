@@ -511,6 +511,45 @@ def test_linhas_painel_locadores_adicionais_vazio():
     assert linha.locadores_adicionais == ""
 
 
+def test_linhas_painel_formata_indice_fonte():
+    """Plano B, Fase 6: o Painel expõe a fonte do índice de reajuste
+    (``indice_fonte``) como metadado de exibição — sem afetar o filtro."""
+    contrato = _contrato_pf_pj()
+    contrato = contrato.model_copy(
+        update={"reajuste": contrato.reajuste.model_copy(update={"indice_fonte": "FGV"})}
+    )
+    ctrl = _relatorio_controller([contrato])
+    linha = ctrl.linhas_painel()[0]
+
+    assert linha.indice_fonte == "FGV"
+
+
+def test_linhas_painel_indice_fonte_vazio():
+    ctrl = _relatorio_controller([_contrato_pf_pj()])
+    linha = ctrl.linhas_painel()[0]
+
+    assert linha.indice_fonte == ""
+
+
+def test_linhas_painel_formata_carencia():
+    """Plano B, Fase 6: o Painel expõe a carência (em meses) já formatada,
+    reusando ``formatar_carencia_meses`` (``infrastructure/report_exporters.py``)
+    — sem reimplementar a formatação."""
+    contrato = _contrato_pf_pj()
+    contrato = contrato.model_copy(update={"carencia_meses": 2})
+    ctrl = _relatorio_controller([contrato])
+    linha = ctrl.linhas_painel()[0]
+
+    assert linha.carencia == "2 meses"
+
+
+def test_linhas_painel_carencia_vazia():
+    ctrl = _relatorio_controller([_contrato_pf_pj()])
+    linha = ctrl.linhas_painel()[0]
+
+    assert linha.carencia == ""
+
+
 def test_linha_incompleta_marca_revisao():
     ctrl = _relatorio_controller([_contrato_incompleto()])
     assert ctrl.linhas_painel()[0].revisao is True

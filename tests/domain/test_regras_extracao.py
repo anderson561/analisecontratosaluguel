@@ -359,6 +359,16 @@ def test_inicio_e_fim_por_ancora_isolada():
     assert R.extrair_data_fim("término em 14/07/2028").valor == date(2028, 7, 14)
 
 
+def test_inicio_por_verbo_iniciando_se():
+    # REGRESSÃO: raiz "in[íi]cio\w*" exige o substantivo — "iniciando-se" (verbo)
+    # nunca casava, mesmo com a data explícita logo em seguida no texto.
+    texto = (
+        "iniciando-se em 30 de julho de 2026 e encerrando-se em 29 de julho "
+        "de 2031, independentemente de notificação."
+    )
+    assert R.extrair_data_inicio(texto).valor == date(2026, 7, 30)
+
+
 def test_prazo_meses_numerico_ancorado():
     res = R.extrair_prazo_meses("pelo prazo de 24 (vinte e quatro) meses")
     assert res.valor == 24
@@ -387,6 +397,23 @@ def test_prazo_generico_sem_ancora_e_baixa_confianca():
     assert res.valor == 12
     assert res.confianca == CONF_BAIXA
     assert not res.resolvido  # cai abaixo do limiar -> revisão manual
+
+
+def test_prazo_anos_numerico_ancorado_converte_para_meses():
+    # REGRESSÃO: cláusula real usa "anos", não "meses" — regex antiga não casava
+    # e o prazo, mesmo explícito no texto, era perdido (nao_encontrado).
+    res = R.extrair_prazo_meses(
+        "A locação terá prazo determinado de 05 (cinco) anos, "
+        "iniciando-se em 30 de julho de 2026."
+    )
+    assert res.valor == 60
+    assert res.confianca == CONF_ALTA
+
+
+def test_prazo_anos_por_extenso_ancorado_converte_para_meses():
+    res = R.extrair_prazo_meses("pelo prazo de cinco anos, prorrogável.")
+    assert res.valor == 60
+    assert res.confianca == CONF_MEDIA
 
 
 @pytest.mark.parametrize(

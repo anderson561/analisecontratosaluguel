@@ -430,10 +430,10 @@ def extrair_garantias(texto: str) -> ResultadoCampo[list[ModalidadeGarantia]]:
 # Vigência: início, fim, prazo (meses), dia de vencimento mensal
 # --------------------------------------------------------------------------- #
 _RE_PERIODO = re.compile(
-    rf"(?:de|in[íi]cio\w*)\s+(?P<inicio>{DATA_REGEX})\s+(?:a|at[ée]|ao)\s+(?P<fim>{DATA_REGEX})",
+    rf"(?:de|in[íi]ci\w*)\s+(?P<inicio>{DATA_REGEX})\s+(?:a|at[ée]|ao)\s+(?P<fim>{DATA_REGEX})",
     re.IGNORECASE,
 )
-_RE_INICIO = re.compile(rf"in[íi]cio\w*[^.\n]{{0,30}}?(?P<d>{DATA_REGEX})", re.IGNORECASE)
+_RE_INICIO = re.compile(rf"in[íi]ci\w*[^.\n]{{0,30}}?(?P<d>{DATA_REGEX})", re.IGNORECASE)
 _RE_FIM = re.compile(
     rf"(?:t[ée]rmino|t[ée]rmin\w*|fim|final|encerr\w*)[^.\n]{{0,30}}?(?P<d>{DATA_REGEX})",
     re.IGNORECASE,
@@ -452,6 +452,17 @@ _RE_MESES_GENERICO = re.compile(
 )
 _RE_PRAZO_EXTENSO = re.compile(
     r"prazo[^.\n]{0,40}?(?:de\s+)?([a-zçãêé]+(?:\s+e\s+[a-zçãêé]+)?)\s+meses",
+    re.IGNORECASE,
+)
+# Prazo em anos: mesma âncora "prazo", convertido para meses (× 12). Tentado
+# SOMENTE como fallback, depois da cascata de meses acima — preserva 100% do
+# comportamento já validado para contratos que já usam "meses".
+_RE_PRAZO_ANOS_ANCORADO = re.compile(
+    r"prazo[^.\n]{0,40}?(\d{1,3})\s*\(?[a-zçãêé\s]*\)?\s*anos",
+    re.IGNORECASE,
+)
+_RE_PRAZO_ANOS_EXTENSO = re.compile(
+    r"prazo[^.\n]{0,40}?(?:de\s+)?([a-zçãêé]+(?:\s+e\s+[a-zçãêé]+)?)\s+anos",
     re.IGNORECASE,
 )
 _RE_VENCIMENTO = re.compile(
@@ -504,7 +515,18 @@ def extrair_prazo_meses(texto: str) -> ResultadoCampo[int]:
         n = numero_por_extenso(m.group(1))
         if n is not None:
             return ResultadoCampo(n, CONF_MEDIA)
-    # 3. Genérico "<n> meses" SEM âncora — último recurso. Pode ser a
+    # 3. Ancorado em "prazo" + dígito + "anos" → mesmo sinal forte da âncora,
+    #    convertido para meses (× 12, conversão exata, sem arredondamento).
+    m = _RE_PRAZO_ANOS_ANCORADO.search(t)
+    if m:
+        return ResultadoCampo(int(m.group(1)) * 12, CONF_ALTA)
+    # 4. Ancorado em "prazo" + número por extenso + "anos" ("cinco anos").
+    m = _RE_PRAZO_ANOS_EXTENSO.search(t)
+    if m:
+        n = numero_por_extenso(m.group(1))
+        if n is not None:
+            return ResultadoCampo(n * 12, CONF_MEDIA)
+    # 5. Genérico "<n> meses" SEM âncora — último recurso. Pode ser a
     #    periodicidade do reajuste, não o prazo: confiança baixa → revisão.
     m = _RE_MESES_GENERICO.search(t)
     if m:

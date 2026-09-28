@@ -39,9 +39,11 @@ CABECALHOS_CONTRATOS = [
     "IRRF Retido",
     "Redução IRRF (Lei 15.270/2025)",
     "Índice",
+    "Fonte do Índice",
     "Próximo Reajuste",
     "Reajuste Auto",
     "Vencimento",
+    "Carência",
     "Despesas",
     "Prorrogação",
     "Locador(es) Adicional(is)",
@@ -50,12 +52,21 @@ CABECALHOS_CONTRATOS = [
 # Larguras (em pontos) da tabela de contratos do PDF, uma por cabeçalho — a
 # soma cabe na área útil da página A4 paisagem (larguras de coluna fixas são
 # OBRIGATÓRIAS aqui: sem elas o reportlab dimensiona cada coluna pelo texto
-# mais largo, e com 13 colunas a soma passa da largura da página, fazendo o
+# mais largo, e com 15 colunas a soma passa da largura da página, fazendo o
 # conteúdo que ultrapassa a borda ser descartado do PDF — não é só um recorte
 # visual). Os cabeçalhos mais longos quebram em duas linhas (célula com
 # ``Paragraph``); os dados (mais curtos) cabem numa linha só.
-_LARGURAS_COLUNAS_CONTRATOS = [88, 63, 88, 54, 48, 58, 39, 54, 46, 54, 72, 58, 63]
+#
+# Soma == 785pt (área útil da página: A4 paisagem, 841.89pt de largura total,
+# menos leftMargin=28 e rightMargin=28 do ``SimpleDocTemplate`` abaixo).
+# "Fonte do Índice" e "Carência" têm conteúdo curto ("FGV", "2 meses"), por
+# isso ficam estreitas; as demais foram reduzidas proporcionalmente para
+# abrir espaço sem repetir o bug de descarte silencioso de conteúdo.
+_LARGURAS_COLUNAS_CONTRATOS = [
+    78, 53, 78, 50, 44, 58, 31, 40, 48, 40, 46, 48, 50, 58, 63,
+]
 assert len(_LARGURAS_COLUNAS_CONTRATOS) == len(CABECALHOS_CONTRATOS)
+assert sum(_LARGURAS_COLUNAS_CONTRATOS) <= 785, "larguras excedem a área útil da página A4 paisagem"
 
 _VAZIO = ""  # célula em branco para dado ausente (revisão manual)
 
@@ -138,6 +149,13 @@ def formatar_prorrogacao(automatica: bool, prazo_meses: int | None) -> str:
     return "Sim"
 
 
+def formatar_carencia_meses(carencia_meses: int | None) -> str:
+    """``"2 meses"`` quando há carência, vazio quando não (None)."""
+    if carencia_meses is None:
+        return _VAZIO
+    return f"{carencia_meses} meses"
+
+
 def formatar_locadores_adicionais(locadores: tuple[Parte, ...]) -> str:
     """Nomes dos locadores ADEM do principal, separados por ``"; "`` (vazio se
     não houver nenhum). Uma ``Parte`` sem nome usa o texto de fallback
@@ -158,9 +176,11 @@ def linha_para_celulas(linha: LinhaContrato) -> list[str]:
         formatar_moeda_brl(linha.irrf_retido),
         formatar_moeda_brl(linha.reducao_irrf),
         _texto(linha.indice),
+        _texto(linha.indice_fonte),
         _texto(linha.proximo_reajuste),
         _sim_nao(linha.reajuste_automatico),
         formatar_data_br(linha.vencimento),
+        formatar_carencia_meses(linha.carencia_meses),
         formatar_despesas(linha.despesas),
         formatar_prorrogacao(linha.prorrogacao_automatica, linha.prorrogacao_prazo_meses),
         formatar_locadores_adicionais(linha.locadores_adicionais),
@@ -277,6 +297,8 @@ class PdfRelatorioExporter:
             "",
             formatar_moeda_brl(contratos.total_irrf_retido),
             formatar_moeda_brl(contratos.total_reducao_irrf),
+            "",
+            "",
             "",
             "",
             "",

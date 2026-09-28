@@ -22,6 +22,7 @@ from contract_parser.infrastructure.report_exporters import (
     CABECALHOS_CONTRATOS,
     ExcelRelatorioExporter,
     PdfRelatorioExporter,
+    formatar_carencia_meses,
     formatar_data_br,
     formatar_despesas,
     formatar_locadores_adicionais,
@@ -179,6 +180,17 @@ def test_formatar_locadores_adicionais_sem_nome_usa_fallback():
     assert formatar_locadores_adicionais(locadores) == "(sem nome identificado)"
 
 
+@pytest.mark.parametrize(
+    ("carencia_meses", "esperado"),
+    [
+        (None, ""),
+        (2, "2 meses"),
+    ],
+)
+def test_formatar_carencia_meses(carencia_meses, esperado):
+    assert formatar_carencia_meses(carencia_meses) == esperado
+
+
 def test_linha_para_celulas_inclui_despesas_e_prorrogacao_no_final():
     linha = LinhaContrato(
         locatario_nome="Alpha Comercio LTDA",
@@ -200,10 +212,12 @@ def test_linha_para_celulas_inclui_despesas_e_prorrogacao_no_final():
         carencia_meses=None,
     )
     celulas = linha_para_celulas(linha)
-    assert len(celulas) == 13
-    assert celulas[10] == "IPTU: Locatário"
-    assert celulas[11] == "Sim (12 meses)"
-    assert celulas[12] == NOME_LOCADOR_ADICIONAL
+    assert len(celulas) == 15
+    assert celulas[7] == ""  # indice_fonte ausente
+    assert celulas[11] == ""  # carencia_meses ausente
+    assert celulas[12] == "IPTU: Locatário"
+    assert celulas[13] == "Sim (12 meses)"
+    assert celulas[14] == NOME_LOCADOR_ADICIONAL
 
 
 # --------------------------------------------------------------------------- #
@@ -232,21 +246,28 @@ def test_excel_gera_duas_abas_com_cabecalhos_e_valores(tmp_path):
     assert contratos["E2"].value == "R$ 0,00"
     # Coluna nova: valor da redução aplicada (igual à tabela nesta base: 312,89).
     assert contratos["F2"].value == "R$ 312,89"
-    assert contratos["I2"].value == "Sim"
-    assert contratos["J2"].value == "10/10/2028"
+    # Coluna nova: fonte do índice da linha Alpha.
+    assert contratos["H2"].value == "FGV"
+    assert contratos["J2"].value == "Sim"
+    assert contratos["K2"].value == "10/10/2028"
+    # Coluna nova: carência da linha Alpha.
+    assert contratos["L2"].value == "2 meses"
     # Colunas novas (Despesas/Prorrogação) da linha Alpha.
-    assert contratos["K2"].value == "IPTU: Locatário"
-    assert contratos["L2"].value == "Sim (12 meses)"
+    assert contratos["M2"].value == "IPTU: Locatário"
+    assert contratos["N2"].value == "Sim (12 meses)"
     # Coluna nova: locador adicional da linha Alpha.
-    assert contratos["M2"].value == NOME_LOCADOR_ADICIONAL
+    assert contratos["O2"].value == NOME_LOCADOR_ADICIONAL
     # Locador PJ ⇒ IRRF R$ 0,00 e nenhuma redução.
     assert contratos["E3"].value == "R$ 0,00"
     assert contratos["F3"].value == "R$ 0,00"
-    # Beta não tem despesas/prorrogação registradas (openpyxl grava string
-    # vazia como cela em branco, que volta como None na releitura).
-    assert contratos["K3"].value is None
-    assert contratos["L3"].value == "Não"
+    # Beta não tem fonte do índice nem carência registradas (openpyxl grava
+    # string vazia como cela em branco, que volta como None na releitura).
+    assert contratos["H3"].value is None
+    assert contratos["L3"].value is None
+    # Beta não tem despesas/prorrogação registradas (mesmo motivo acima).
     assert contratos["M3"].value is None
+    assert contratos["N3"].value == "Não"
+    assert contratos["O3"].value is None
 
     # Rodapé: total de IRRF retido (0,00 + 0,00) e total de redução (312,89 + 0,00).
     linhas_valores = list(contratos.iter_rows(values_only=True))
@@ -302,6 +323,9 @@ def test_pdf_gera_arquivo_nao_trivial_com_texto_esperado(tmp_path):
     assert "Locatário" in texto
     assert "12 meses)" in texto
     assert NOME_LOCADOR_ADICIONAL in texto
+    # Colunas novas: fonte do índice e carência da linha Alpha.
+    assert "FGV" in texto
+    assert "2 meses" in texto
     assert PENDENCIA in texto
 
 

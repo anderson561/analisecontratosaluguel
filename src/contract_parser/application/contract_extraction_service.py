@@ -73,6 +73,9 @@ class ExtratorContrato:
         )
         data_fim = self._registrar(memoria, "data_fim_vigencia", regras.extrair_data_fim(texto))
         prazo = self._registrar(memoria, "prazo_meses", regras.extrair_prazo_meses(texto))
+        carencia = self._registrar(
+            memoria, "carencia_meses", regras.extrair_carencia_meses(texto)
+        )
         dia_venc = self._registrar(
             memoria, "dia_vencimento_mensal", regras.extrair_dia_vencimento(texto)
         )
@@ -106,6 +109,7 @@ class ExtratorContrato:
             data_fim_vigencia=data_fim,
             prazo_meses=prazo,
             dia_vencimento_mensal=dia_venc,
+            carencia_meses=carencia,
             reajuste=reajuste,
             despesas=despesas or {},
             prorrogacao=prorrogacao,
@@ -135,6 +139,9 @@ class ExtratorContrato:
 
     def _montar_reajuste(self, memoria: dict[str, RegistroCampo], texto: str) -> Reajuste:
         indice = self._registrar(memoria, "reajuste_indice", regras.extrair_indice_reajuste(texto))
+        indice_fonte = self._registrar(
+            memoria, "reajuste_indice_fonte", regras.extrair_indice_fonte(texto, indice)
+        )
         periodicidade = self._registrar(
             memoria, "reajuste_periodicidade", regras.extrair_periodicidade_meses(texto)
         )
@@ -146,6 +153,7 @@ class ExtratorContrato:
         )
         return Reajuste(
             indice=indice,
+            indice_fonte=indice_fonte,
             periodicidade_meses=periodicidade,
             proximo_reajuste=proximo,
             automatico=bool(automatico),

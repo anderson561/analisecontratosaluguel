@@ -252,3 +252,53 @@ def test_sem_locador_adicional_usa_default_lista_vazia_sem_quebrar():
     contrato = ExtratorContrato().extrair(TEXTO_RESIDENCIAL)
 
     assert contrato.locadores_adicionais == []
+
+
+# --------------------------------------------------------------------------- #
+# Índice-fonte do reajuste e carência (Plano B, Fase 3 — conecta
+# extrair_indice_fonte e extrair_carencia_meses ao orquestrador; extratores já
+# prontos na Fase 2, aqui é só wiring).
+# --------------------------------------------------------------------------- #
+TEXTO_INDICE_FONTE_E_CARENCIA = (
+    "LOCADOR: Fulano de Tal, CPF 123.456.789-09.\n\n"
+    "O aluguel mensal é de R$ 2.000,00, reajustado pelo IGP-M/FGV anualmente.\n"
+    "Fica concedida carência de 2 (dois) meses para pagamento do aluguel, "
+    "contados da assinatura deste instrumento."
+)
+
+TEXTO_SEM_FONTE_E_SEM_CARENCIA = (
+    "LOCADOR: Fulano de Tal, CPF 123.456.789-09.\n\n"
+    "O aluguel mensal é de R$ 2.000,00, reajustado pelo IGP-M anualmente."
+)
+
+
+def test_indice_fonte_e_carencia_conectados_ao_orquestrador():
+    contrato = ExtratorContrato().extrair(TEXTO_INDICE_FONTE_E_CARENCIA)
+
+    assert contrato.reajuste.indice == "IGP-M"
+    assert contrato.reajuste.indice_fonte == "FGV"
+    assert contrato.carencia_meses == 2
+
+
+def test_memoria_registra_proveniencia_de_indice_fonte_e_carencia():
+    contrato = ExtratorContrato().extrair(TEXTO_INDICE_FONTE_E_CARENCIA)
+    memoria = contrato.memoria_extracao
+
+    assert memoria["reajuste_indice_fonte"].origem == OrigemExtracao.REGRA
+    assert not memoria["reajuste_indice_fonte"].necessita_revisao
+
+    assert memoria["carencia_meses"].origem == OrigemExtracao.REGRA
+    assert not memoria["carencia_meses"].necessita_revisao
+
+
+def test_sem_carencia_ou_fonte_de_indice_nao_gera_revisao():
+    contrato = ExtratorContrato().extrair(TEXTO_SEM_FONTE_E_SEM_CARENCIA)
+
+    assert contrato.carencia_meses is None
+    assert contrato.reajuste.indice_fonte is None
+
+    memoria = contrato.memoria_extracao
+    # Ausência é o caso NORMAL/ESPERADO (decidido na Fase 2) — não deve
+    # gerar revisão no Painel.
+    assert memoria["carencia_meses"].necessita_revisao is False
+    assert memoria["reajuste_indice_fonte"].necessita_revisao is False

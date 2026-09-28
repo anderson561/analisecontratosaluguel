@@ -15,6 +15,7 @@ from contract_parser.domain.contrato import (
     Contrato,
     Parte,
     Prorrogacao,
+    Reajuste,
     ResponsavelDespesa,
     TipoDespesa,
     TipoParte,
@@ -98,3 +99,41 @@ def test_contrato_locador_e_locadores_adicionais_sao_independentes():
 
     assert contrato.locador == Parte(nome="A")
     assert contrato.locadores_adicionais == [Parte(nome="B"), Parte(nome="C")]
+
+
+# --------------------------------------------------------------------------- #
+# Plano B, Fase 1: campos aditivos ``Reajuste.indice_fonte`` e
+# ``Contrato.carencia_meses`` — mesmo padrão de ``locadores_adicionais``.
+# --------------------------------------------------------------------------- #
+def test_reajuste_indice_fonte_default_none():
+    reajuste = Reajuste()
+    assert reajuste.indice_fonte is None
+
+
+def test_reajuste_indice_fonte_round_trip_json():
+    reajuste = Reajuste(indice="IGP-M", indice_fonte="FGV")
+
+    reidratado = Reajuste.model_validate_json(reajuste.model_dump_json())
+
+    assert reidratado.indice_fonte == "FGV"
+    assert reidratado.indice == "IGP-M"
+
+
+def test_contrato_carencia_meses_default_none():
+    contrato = Contrato()
+    assert contrato.carencia_meses is None
+
+
+def test_contrato_carencia_meses_round_trip_json():
+    contrato = Contrato(carencia_meses=2)
+
+    reidratado = Contrato.model_validate_json(contrato.model_dump_json())
+
+    assert reidratado.carencia_meses == 2
+
+
+def test_contrato_carencia_meses_independente_de_prazo_meses():
+    contrato = Contrato(prazo_meses=24, carencia_meses=2)
+
+    assert contrato.prazo_meses == 24
+    assert contrato.carencia_meses == 2

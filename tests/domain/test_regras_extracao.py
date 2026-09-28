@@ -457,6 +457,59 @@ def test_indice_reajuste_vedado_moeda_estrangeira():
     assert res.valor == "moeda estrangeira"
 
 
+# --------------------------------------------------------------------------- #
+# Plano B, Fase 1: fonte do índice de reajuste (``indice_fonte``)
+# --------------------------------------------------------------------------- #
+def test_indice_fonte_encontrada_ancorada_no_indice():
+    res = R.extrair_indice_fonte("reajustado pelo IGP-M/FGV anualmente", "IGP-M")
+    assert res.valor == "FGV"
+    assert res.confianca == CONF_ALTA
+
+
+def test_indice_fonte_ausente_e_caso_normal_confiante():
+    # A maioria dos contratos cita só o índice, sem qualificar a fonte —
+    # isso NÃO é uma lacuna: não pode usar ``nao_encontrado``.
+    res = R.extrair_indice_fonte("reajustado pelo IGP-M anualmente", "IGP-M")
+    assert res.valor is None
+    assert res.confianca == CONF_ALTA
+    assert res.resolvido is False  # None não "resolve", mas também não é revisão
+    assert res.origem != R.OrigemExtracao.NAO_ENCONTRADO
+
+
+def test_indice_fonte_com_indice_none():
+    res = R.extrair_indice_fonte("reajustado pelo IGP-M/FGV anualmente", None)
+    assert res.valor is None
+    assert res.confianca == CONF_ALTA
+    assert res.origem != R.OrigemExtracao.NAO_ENCONTRADO
+
+
+# --------------------------------------------------------------------------- #
+# Plano B, Fase 1: carência (em meses)
+# --------------------------------------------------------------------------- #
+def test_carencia_meses_numerico_ancorado():
+    res = R.extrair_carencia_meses("haverá carência de 2 (dois) meses")
+    assert res.valor == 2
+    assert res.confianca == CONF_ALTA
+
+
+def test_carencia_sem_mencao_e_caso_normal_confiante():
+    # Esmagadora maioria dos contratos não tem cláusula de carência —
+    # ausência total da palavra é confiante, não dispara revisão (mesmo
+    # critério usado por ``ContractExtractionService._registrar``: origem
+    # != NAO_ENCONTRADO e confiança acima do limiar).
+    res = R.extrair_carencia_meses("prazo de 24 meses, reajuste anual pelo IGP-M.")
+    assert res.valor is None
+    assert res.confianca == CONF_ALTA
+    assert res.origem != R.OrigemExtracao.NAO_ENCONTRADO
+
+
+def test_carencia_mencionada_sem_valor_em_meses_dispara_revisao():
+    # Mencionada mas em dias — lacuna real: não converte, vai para revisão.
+    res = R.extrair_carencia_meses("haverá carência de 60 dias antes do primeiro pagamento")
+    assert res.resolvido is False
+    assert res.origem == R.OrigemExtracao.NAO_ENCONTRADO
+
+
 @pytest.mark.parametrize(
     ("texto", "esperado"),
     [

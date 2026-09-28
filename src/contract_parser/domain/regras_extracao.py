@@ -551,6 +551,40 @@ def extrair_dia_vencimento(texto: str) -> ResultadoCampo[int]:
     return ResultadoCampo(dia, CONF_ALTA)
 
 
+# Ancorada em "carência" (aceita "carencia" sem acento) + dígito + "meses",
+# numa janela curta (mesmo estilo de ``_RE_PERIODICIDADE_MESES``). Lazy para
+# não atravessar até um número distante que não seja o da carência.
+_RE_CARENCIA_MESES = re.compile(
+    r"car[êe]ncia[^.\n]{0,40}?(\d{1,2})\s*(?:\([^)]{0,20}\)\s*)?meses",
+    re.IGNORECASE,
+)
+# Só para distinguir "não mencionado" (caso normal) de "mencionado mas sem
+# valor em meses resolvível" (lacuna real — vai para revisão).
+_RE_CARENCIA_MENCIONADA = re.compile(r"car[êe]ncia", re.IGNORECASE)
+
+
+def extrair_carencia_meses(texto: str) -> ResultadoCampo[int]:
+    """Carência (em meses), ancorada na palavra "carência".
+
+    Três estados distintos (não é uma cascata de fallback como
+    ``extrair_prazo_meses``): (1) valor em meses resolvido -> confiante;
+    (2) palavra "carência" ausente do texto -> caso NORMAL/ESPERADO (a
+    esmagadora maioria dos contratos não tem essa cláusula) — confiante,
+    sem revisão; (3) "carência" mencionada mas sem um valor em meses
+    resolvível (ex.: expressa em dias) -> lacuna real, vai para revisão.
+    Não converte dias -> meses (decisão de arredondamento fora de escopo).
+    """
+    t = texto or ""
+    m = _RE_CARENCIA_MESES.search(t)
+    if m:
+        return ResultadoCampo(int(m.group(1)), CONF_ALTA)
+    if _RE_CARENCIA_MENCIONADA.search(t):
+        return ResultadoCampo.nao_encontrado(
+            "cláusula de carência mencionada mas não expressa em meses — confirmar manualmente"
+        )
+    return ResultadoCampo(None, CONF_ALTA)
+
+
 # --------------------------------------------------------------------------- #
 # Reajuste: índice, periodicidade, próximo, flag automático
 # --------------------------------------------------------------------------- #
@@ -595,6 +629,41 @@ def extrair_indice_reajuste(texto: str) -> ResultadoCampo[str]:
     if _RE_MOEDA_ESTRANGEIRA.search(t):
         return ResultadoCampo("moeda estrangeira", CONF_ALTA, detalhe="índice vedado (Art. 18)")
     return ResultadoCampo.nao_encontrado("índice de reajuste não localizado")
+
+
+# Fontes conhecidas do índice, numa janela curta (~15 chars) logo APÓS a
+# posição do índice canônico — não a janela larga ``[^.\n]{0,40}`` usada em
+# outras regexes deste arquivo, porque isso colaria a fonte de OUTRO índice
+# citado mais adiante na mesma frase à menção atual.
+_RE_INDICE_FONTE = re.compile(r"^\s*/\s*(FGV|IBGE|FIPE|BACEN)\b", re.IGNORECASE)
+
+
+def extrair_indice_fonte(texto: str, indice: str | None) -> ResultadoCampo[str]:
+    """Fonte do índice de reajuste (ex.: "FGV" em "IGP-M/FGV"), ancorada na
+    MESMA menção do ``indice`` canônico já resolvido (via
+    ``extrair_indice_reajuste``) — não em qualquer lugar do texto.
+
+    A grande maioria dos contratos cita só o índice, sem qualificar a fonte
+    explicitamente: esse é o caso NORMAL/ESPERADO, não uma lacuna suspeita
+    (mesmo raciocínio de ``locadores_adicionais``). Por isso a ausência de
+    fonte — índice ``None``, índice não localizado no texto, ou nenhuma fonte
+    reconhecida na janela — devolve ``None`` com ``CONF_ALTA`` (nunca
+    ``nao_encontrado``, que dispararia revisão em massa).
+    """
+    if not indice:
+        return ResultadoCampo(None, CONF_ALTA)
+    t = texto or ""
+    regex_indice = next((regex for nome, regex in _INDICES if nome == indice), None)
+    if regex_indice is None:
+        return ResultadoCampo(None, CONF_ALTA)
+    m_indice = regex_indice.search(t)
+    if not m_indice:
+        return ResultadoCampo(None, CONF_ALTA)
+    janela = t[m_indice.end() : m_indice.end() + 15]
+    m_fonte = _RE_INDICE_FONTE.match(janela)
+    if not m_fonte:
+        return ResultadoCampo(None, CONF_ALTA)
+    return ResultadoCampo(m_fonte.group(1).upper(), CONF_ALTA)
 
 
 def extrair_periodicidade_meses(texto: str) -> ResultadoCampo[int]:

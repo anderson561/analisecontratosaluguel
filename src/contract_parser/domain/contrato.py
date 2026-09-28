@@ -87,6 +87,7 @@ class Reajuste(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     indice: str | None = None  # IPCA / IGP-M / INPC / ... (ou texto vedado bruto)
+    indice_fonte: str | None = None  # ex.: "FGV" em "IGP-M/FGV" (metadado, não usado em filtro)
     periodicidade_meses: int | None = None
     proximo_reajuste: str | None = None  # ISO (aaaa-mm-dd) ou "mm/aaaa"
     automatico: bool = False
@@ -162,6 +163,7 @@ class Contrato(BaseModel):
     data_fim_vigencia: date | None = None
     prazo_meses: int | None = None
     dia_vencimento_mensal: int | None = None
+    carencia_meses: int | None = None
 
     # Reajuste
     reajuste: Reajuste = Field(default_factory=Reajuste)

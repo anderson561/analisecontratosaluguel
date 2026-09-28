@@ -45,12 +45,14 @@ class LinhaContrato:
     valor_aluguel: Decimal | None
     irrf: ResultadoIRRF | None
     indice: str | None
+    indice_fonte: str | None
     proximo_reajuste: str | None
     reajuste_automatico: bool
     despesas: dict[TipoDespesa, ResponsavelDespesa | None]
     prorrogacao_automatica: bool
     prorrogacao_prazo_meses: int | None
     vencimento: date | None  # data_fim_vigencia (§4: "Vencimento" = fim da vigência)
+    carencia_meses: int | None
 
     @property
     def irrf_retido(self) -> Decimal:

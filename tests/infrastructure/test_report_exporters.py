@@ -54,12 +54,14 @@ def _relatorio() -> Relatorio:
             valor_aluguel=Decimal("5000.00"),
             irrf=irrf_pf,
             indice="IPCA",
+            indice_fonte="FGV",
             proximo_reajuste="10/2026",
             reajuste_automatico=True,
             despesas={TipoDespesa.IPTU: ResponsavelDespesa.LOCATARIO},
             prorrogacao_automatica=True,
             prorrogacao_prazo_meses=12,
             vencimento=date(2028, 10, 10),
+            carencia_meses=2,
         ),
         LinhaContrato(
             locatario_nome="Beta Servicos ME",
@@ -69,12 +71,14 @@ def _relatorio() -> Relatorio:
             valor_aluguel=Decimal("8000.00"),
             irrf=irrf_pj,
             indice="IGP-M",
+            indice_fonte=None,
             proximo_reajuste="05/2026",
             reajuste_automatico=False,
             despesas={},
             prorrogacao_automatica=False,
             prorrogacao_prazo_meses=None,
             vencimento=date(2027, 5, 1),
+            carencia_meses=None,
         ),
     ]
     return Relatorio(
@@ -186,12 +190,14 @@ def test_linha_para_celulas_inclui_despesas_e_prorrogacao_no_final():
         valor_aluguel=Decimal("5000.00"),
         irrf=None,
         indice="IPCA",
+        indice_fonte=None,
         proximo_reajuste="10/2026",
         reajuste_automatico=True,
         despesas={TipoDespesa.IPTU: ResponsavelDespesa.LOCATARIO},
         prorrogacao_automatica=True,
         prorrogacao_prazo_meses=12,
         vencimento=date(2028, 10, 10),
+        carencia_meses=None,
     )
     celulas = linha_para_celulas(linha)
     assert len(celulas) == 13

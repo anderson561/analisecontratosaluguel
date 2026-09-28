@@ -124,6 +124,7 @@ def _linha_rica() -> LinhaContrato:
         valor_aluguel=Decimal("5000.00"),
         irrf=_resultado_irrf(),
         indice="IPCA",
+        indice_fonte="FGV",
         proximo_reajuste="10/2026",
         reajuste_automatico=True,
         despesas={
@@ -134,6 +135,7 @@ def _linha_rica() -> LinhaContrato:
         prorrogacao_automatica=True,
         prorrogacao_prazo_meses=12,
         vencimento=date(2028, 10, 10),
+        carencia_meses=2,
     )
 
 
@@ -146,12 +148,14 @@ def _linha_pobre() -> LinhaContrato:
         valor_aluguel=None,
         irrf=None,
         indice=None,
+        indice_fonte=None,
         proximo_reajuste=None,
         reajuste_automatico=False,
         despesas={},
         prorrogacao_automatica=False,
         prorrogacao_prazo_meses=None,
         vencimento=None,
+        carencia_meses=None,
     )
 
 

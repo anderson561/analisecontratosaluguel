@@ -73,12 +73,14 @@ class RelatorioService:
             valor_aluguel=valor,
             irrf=irrf,
             indice=contrato.reajuste.indice,
+            indice_fonte=contrato.reajuste.indice_fonte,
             proximo_reajuste=contrato.reajuste.proximo_reajuste,
             reajuste_automatico=contrato.reajuste.automatico,
             despesas=contrato.despesas,
             prorrogacao_automatica=contrato.prorrogacao.automatica,
             prorrogacao_prazo_meses=contrato.prorrogacao.prazo_meses,
             vencimento=contrato.data_fim_vigencia,
+            carencia_meses=contrato.carencia_meses,
         )
 
     def _relatorio_contratos(self, contratos: list[Contrato]) -> RelatorioContratos:

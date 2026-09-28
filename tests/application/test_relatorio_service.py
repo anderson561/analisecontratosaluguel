@@ -234,6 +234,31 @@ def test_relatorio01_linha_locadores_adicionais_default_vazio():
     assert linha.locadores_adicionais == ()
 
 
+def test_relatorio01_linha_leva_indice_fonte_e_carencia_do_contrato():
+    """Passthrough: indice_fonte (Reajuste) e carencia_meses (Contrato) crus."""
+    contrato = _contrato_pf_pj().model_copy(
+        update={
+            "reajuste": Reajuste(
+                indice="IGP-M", indice_fonte="FGV", proximo_reajuste="10/2026", automatico=True
+            ),
+            "carencia_meses": 2,
+        }
+    )
+    relatorio = RelatorioService(_repo()).montar([contrato])
+    linha = relatorio.contratos.linhas[0]
+
+    assert linha.indice_fonte == "FGV"
+    assert linha.carencia_meses == 2
+
+
+def test_relatorio01_linha_indice_fonte_e_carencia_default_none():
+    relatorio = RelatorioService(_repo()).montar([_contrato_pf_pj()])
+    linha = relatorio.contratos.linhas[0]
+
+    assert linha.indice_fonte is None
+    assert linha.carencia_meses is None
+
+
 def test_montagem_completa_agrega_os_dois_relatorios():
     relatorio = RelatorioService(_repo()).montar([_contrato_pf_pj()])
     assert relatorio.contratos.total_contratos == 1

@@ -40,12 +40,14 @@ def _linha(irrf: ResultadoIRRF | None) -> LinhaContrato:
         valor_aluguel=Decimal("5000.00"),
         irrf=irrf,
         indice="IPCA",
+        indice_fonte=None,
         proximo_reajuste="10/2026",
         reajuste_automatico=True,
         despesas={},
         prorrogacao_automatica=False,
         prorrogacao_prazo_meses=None,
         vencimento=date(2028, 10, 10),
+        carencia_meses=None,
     )
 
 
@@ -58,6 +60,7 @@ def test_linha_contrato_aceita_despesas_e_prorrogacao():
         valor_aluguel=Decimal("5000.00"),
         irrf=None,
         indice="IPCA",
+        indice_fonte=None,
         proximo_reajuste="10/2026",
         reajuste_automatico=True,
         despesas={
@@ -68,6 +71,7 @@ def test_linha_contrato_aceita_despesas_e_prorrogacao():
         prorrogacao_automatica=True,
         prorrogacao_prazo_meses=12,
         vencimento=date(2028, 10, 10),
+        carencia_meses=None,
     )
     assert linha.despesas == {
         TipoDespesa.IPTU: ResponsavelDespesa.LOCADOR,
@@ -91,12 +95,14 @@ def test_linha_contrato_aceita_locadores_adicionais():
         valor_aluguel=Decimal("5000.00"),
         irrf=None,
         indice="IPCA",
+        indice_fonte=None,
         proximo_reajuste="10/2026",
         reajuste_automatico=True,
         despesas={},
         prorrogacao_automatica=False,
         prorrogacao_prazo_meses=None,
         vencimento=date(2028, 10, 10),
+        carencia_meses=None,
     )
     assert linha.locadores_adicionais == locadores_adicionais
 

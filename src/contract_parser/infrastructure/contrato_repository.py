@@ -52,6 +52,7 @@ def _linha_para_dict(linha: LinhaContrato) -> dict:
         "valor_aluguel": str(linha.valor_aluguel) if linha.valor_aluguel is not None else None,
         "irrf": json.loads(linha.irrf.model_dump_json()) if linha.irrf is not None else None,
         "indice": linha.indice,
+        "indice_fonte": linha.indice_fonte,
         "proximo_reajuste": linha.proximo_reajuste,
         "reajuste_automatico": linha.reajuste_automatico,
         # dict com chave Enum: json.dumps não serializa Enum como chave sem
@@ -64,6 +65,7 @@ def _linha_para_dict(linha: LinhaContrato) -> dict:
         "prorrogacao_automatica": linha.prorrogacao_automatica,
         "prorrogacao_prazo_meses": linha.prorrogacao_prazo_meses,
         "vencimento": linha.vencimento.isoformat() if linha.vencimento is not None else None,
+        "carencia_meses": linha.carencia_meses,
     }
 
 
@@ -82,6 +84,7 @@ def _dict_para_linha(dados: dict) -> LinhaContrato:
         valor_aluguel=Decimal(valor_aluguel) if valor_aluguel is not None else None,
         irrf=ResultadoIRRF.model_validate(dados["irrf"]) if dados["irrf"] is not None else None,
         indice=dados["indice"],
+        indice_fonte=dados["indice_fonte"],
         proximo_reajuste=dados["proximo_reajuste"],
         reajuste_automatico=dados["reajuste_automatico"],
         # Acesso direto (sem .get): init_schema não versiona migração (YAGNI,
@@ -94,6 +97,7 @@ def _dict_para_linha(dados: dict) -> LinhaContrato:
         prorrogacao_automatica=dados["prorrogacao_automatica"],
         prorrogacao_prazo_meses=dados["prorrogacao_prazo_meses"],
         vencimento=date.fromisoformat(vencimento) if vencimento is not None else None,
+        carencia_meses=dados["carencia_meses"],
     )
 
 

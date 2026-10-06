@@ -154,6 +154,17 @@ Entregue (RF01–RF06, CA-01, CA-03 a CA-06 — ver
   lado do IRRF Retido já com a redução aplicada. Fórmula, fonte legal e
   ressalvas: [ADR-003](.agent/specs/adr-003-redutor-irrf-2026.md).
 
+- O Painel e as exportações Excel/PDF trazem também: despesas (com o
+  responsável por cada uma), prorrogação, locadores adicionais (contratos com
+  mais de um locador), fonte do índice de reajuste (ex.: "FGV") e carência (em
+  meses). Quando o contrato não traz a data do próximo reajuste, ela é
+  **calculada** a partir da data de início (assumindo reajuste anual) e fica
+  marcada para revisão; o botão **"Atualizar Próx. Reajuste"** do Painel
+  recalcula essas datas para todos os contratos. Datas lidas do contrato nunca
+  são sobrescritas. Histórico de mudanças em [CHANGELOG.md](CHANGELOG.md).
+- Limitação conhecida: com 2+ locadores o IRRF é calculado só sobre o locador
+  principal; os demais são identificados e exibidos, mas não entram na conta.
+
 Fora do escopo desta versão (decisão deliberada, não pendência esquecida):
 - **Docker/`docker-compose`** (CA-02) — adiado; app e banco (SQLite) rodam
   nativos no host Windows (ver ADR-001, decisão D2).

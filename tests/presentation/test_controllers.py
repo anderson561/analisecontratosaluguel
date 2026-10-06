@@ -1134,6 +1134,187 @@ def test_excluir_todos_contratos_sem_contrato_repo_vira_controller_error():
 
 
 # --------------------------------------------------------------------------- #
+# atualizar_proximos_reajustes (Plano C, Fase 4)
+# --------------------------------------------------------------------------- #
+REFERENCIA_FIXA = date(2026, 10, 6)
+
+
+class RepoContratoEspiao(FakeContratoRepository):
+    """Fake que conta as escritas de ``atualizar_proximo_reajuste``.
+
+    Com ``falhar_na_chamada=N``, a N-ésima escrita levanta ``RepositoryError``.
+    """
+
+    def __init__(self, *, falhar_na_chamada: int | None = None) -> None:
+        super().__init__()
+        self.escritas = 0
+        self._falhar_na_chamada = falhar_na_chamada
+
+    def atualizar_proximo_reajuste(self, id, novo_valor):
+        self.escritas += 1
+        if self.escritas == self._falhar_na_chamada:
+            raise RepositoryError("banco indisponivel")
+        return super().atualizar_proximo_reajuste(id, novo_valor)
+
+
+def _contrato_reajuste(
+    *,
+    origem: OrigemExtracao | None = OrigemExtracao.REGRA_CALCULADA,
+    data_inicio: date | None = date(2024, 3, 1),
+    proximo: str = "2025-03-01",
+    periodicidade: int | None = None,
+) -> Contrato:
+    memoria = (
+        {"reajuste_proximo": RegistroCampo(origem=origem, confianca=0.45, necessita_revisao=True)}
+        if origem is not None
+        else {}
+    )
+    return Contrato(
+        locador=Parte(tipo=TipoParte.PF, nome="João da Silva", documento="11111111111"),
+        locatario=Parte(tipo=TipoParte.PJ, nome="Alpha Comercio LTDA", documento=CNPJ_A),
+        valor_aluguel=Decimal("5000.00"),
+        data_inicio_vigencia=data_inicio,
+        reajuste=Reajuste(
+            indice="IPCA",
+            automatico=True,
+            periodicidade_meses=periodicidade,
+            proximo_reajuste=proximo,
+        ),
+        memoria_extracao=memoria,
+    )
+
+
+def _controller_com_contratos(repo, *contratos) -> tuple[RelatorioController, list[str]]:
+    ids = []
+    for i, contrato in enumerate(contratos):
+        linha = RelatorioService(_repo_portfolio()).montar([contrato]).contratos.linhas[0]
+        ids.append(
+            repo.salvar(
+                arquivo_nome=f"c{i}.pdf",
+                arquivo_hash=f"hash-{i}",
+                contrato=contrato,
+                linha=linha,
+                revisao=False,
+            ).id
+        )
+    ctrl = RelatorioController(
+        RelatorioService(_repo_portfolio()),
+        ExcelRelatorioExporter(),
+        PdfRelatorioExporter(),
+        contrato_repo=repo,
+    )
+    ctrl.carregar_historico()
+    return ctrl, ids
+
+
+def test_atualizar_proximos_reajustes_recalcula_calculado_defasado_e_recarrega_painel():
+    repo = FakeContratoRepository()
+    ctrl, [rid] = _controller_com_contratos(repo, _contrato_reajuste())
+
+    total = ctrl.atualizar_proximos_reajustes(referencia=REFERENCIA_FIXA)
+
+    assert total == 1
+    [registro] = repo.listar()
+    assert registro.id == rid
+    assert registro.contrato.reajuste.proximo_reajuste == "2027-03-01"
+    assert registro.linha.proximo_reajuste == "2027-03-01"
+    assert ctrl.linhas_painel()[0].proximo_reajuste == "2027-03-01"
+
+
+def test_atualizar_proximos_reajustes_nao_sobrescreve_data_extraida_do_texto():
+    repo = RepoContratoEspiao()
+    ctrl, _ = _controller_com_contratos(repo, _contrato_reajuste(origem=OrigemExtracao.REGRA))
+
+    total = ctrl.atualizar_proximos_reajustes(referencia=REFERENCIA_FIXA)
+
+    assert total == 0
+    assert repo.escritas == 0
+    assert repo.listar()[0].contrato.reajuste.proximo_reajuste == "2025-03-01"
+
+
+def test_atualizar_proximos_reajustes_ignora_contrato_sem_registro_de_origem():
+    repo = RepoContratoEspiao()
+    ctrl, _ = _controller_com_contratos(repo, _contrato_reajuste(origem=None))
+
+    assert ctrl.atualizar_proximos_reajustes(referencia=REFERENCIA_FIXA) == 0
+    assert repo.escritas == 0
+
+
+def test_atualizar_proximos_reajustes_pula_calculado_sem_data_inicio():
+    repo = RepoContratoEspiao()
+    ctrl, _ = _controller_com_contratos(repo, _contrato_reajuste(data_inicio=None))
+
+    assert ctrl.atualizar_proximos_reajustes(referencia=REFERENCIA_FIXA) == 0
+    assert repo.escritas == 0
+
+
+def test_atualizar_proximos_reajustes_ja_atualizado_nao_escreve_nem_conta():
+    repo = RepoContratoEspiao()
+    ctrl, _ = _controller_com_contratos(repo, _contrato_reajuste(proximo="2027-03-01"))
+
+    assert ctrl.atualizar_proximos_reajustes(referencia=REFERENCIA_FIXA) == 0
+    assert repo.escritas == 0
+
+
+def test_atualizar_proximos_reajustes_segunda_chamada_seguida_devolve_zero():
+    repo = FakeContratoRepository()
+    ctrl, _ = _controller_com_contratos(repo, _contrato_reajuste())
+
+    assert ctrl.atualizar_proximos_reajustes(referencia=REFERENCIA_FIXA) == 1
+    assert ctrl.atualizar_proximos_reajustes(referencia=REFERENCIA_FIXA) == 0
+
+
+def test_atualizar_proximos_reajustes_lote_misto_conta_so_os_calculados_defasados():
+    repo = FakeContratoRepository()
+    ctrl, _ = _controller_com_contratos(
+        repo,
+        _contrato_reajuste(),
+        _contrato_reajuste(origem=OrigemExtracao.REGRA),
+        _contrato_reajuste(),
+        _contrato_reajuste(data_inicio=None),
+    )
+
+    assert ctrl.atualizar_proximos_reajustes(referencia=REFERENCIA_FIXA) == 2
+
+
+def test_atualizar_proximos_reajustes_respeita_periodicidade_do_contrato():
+    repo = FakeContratoRepository()
+    ctrl, _ = _controller_com_contratos(repo, _contrato_reajuste(periodicidade=6))
+
+    assert ctrl.atualizar_proximos_reajustes(referencia=REFERENCIA_FIXA) == 1
+    assert repo.listar()[0].contrato.reajuste.proximo_reajuste == "2027-03-01"
+
+
+def test_atualizar_proximos_reajustes_sem_contrato_repo_vira_controller_error():
+    ctrl = _relatorio_controller([_contrato_pf_pj()])
+    with pytest.raises(ControllerError):
+        ctrl.atualizar_proximos_reajustes(referencia=REFERENCIA_FIXA)
+
+
+def test_atualizar_proximos_reajustes_sem_referencia_usa_hoje_do_relogio():
+    repo = FakeContratoRepository()
+    ctrl, _ = _controller_com_contratos(repo, _contrato_reajuste(data_inicio=date(2000, 1, 1)))
+
+    total = ctrl.atualizar_proximos_reajustes()
+
+    assert isinstance(total, int)
+    assert total == 1
+    novo = date.fromisoformat(repo.listar()[0].contrato.reajuste.proximo_reajuste)
+    assert novo >= date.today()  # noqa: DTZ011 - mesmo "hoje" local do controller
+
+
+def test_atualizar_proximos_reajustes_falha_de_banco_vira_controller_error_e_recarrega_painel():
+    repo = RepoContratoEspiao(falhar_na_chamada=2)
+    ctrl, _ = _controller_com_contratos(repo, _contrato_reajuste(), _contrato_reajuste())
+
+    with pytest.raises(ControllerError):
+        ctrl.atualizar_proximos_reajustes(referencia=REFERENCIA_FIXA)
+
+    datas = sorted(linha.proximo_reajuste for linha in ctrl.linhas_painel())
+    assert datas == ["2025-03-01", "2027-03-01"]
+
+
+# --------------------------------------------------------------------------- #
 # AppController: orquestração + status de conexão (degradação graciosa)
 # --------------------------------------------------------------------------- #
 def test_app_processar_pasta_realimenta_painel_e_conformidade():

@@ -42,9 +42,10 @@ from contract_parser.application.empresa_importer import (
 )
 from contract_parser.application.empresa_service import EmpresaService
 from contract_parser.application.relatorio_service import RelatorioService
-from contract_parser.domain.contrato import Contrato
+from contract_parser.domain.contrato import Contrato, OrigemExtracao
 from contract_parser.domain.documento_texto import DocumentoTexto
 from contract_parser.domain.empresa import Empresa
+from contract_parser.domain.reajuste_calc import calcular_proximo_reajuste_anual
 from contract_parser.domain.relatorio import LinhaContrato, Relatorio, ResumoConformidade
 from contract_parser.domain.repositories import (
     ContratoRepositoryProtocol,
@@ -522,6 +523,48 @@ class RelatorioController:
             raise ControllerError(_MSG_BANCO) from exc
         self.carregar_historico()
         return total
+
+    def atualizar_proximos_reajustes(self, *, referencia: date | None = None) -> int:
+        """Recalcula e persiste o próximo reajuste dos contratos com data CALCULADA.
+
+        Só toca contratos cuja ``origem`` é ``REGRA_CALCULADA`` (a data
+        "envelhece" com o tempo); a data extraída do texto nunca é
+        sobrescrita. Este é o ponto autorizado a ler o relógio
+        (``date.today()``). Síncrono de propósito: volume baixo, escrita
+        SQLite local. Devolve quantos contratos foram efetivamente
+        atualizados; o Painel é recarregado sempre, mesmo se o banco falhar
+        no meio (as gravações anteriores à falha aparecem).
+        """
+        if self._contrato_repo is None:
+            raise ControllerError("Sem repositório de contratos configurado.")
+        if referencia is None:
+            referencia = date.today()  # noqa: DTZ011 - "hoje" local do usuário (app desktop)
+        atualizados = 0
+        try:
+            for _, contrato, registro_id in self._pares:
+                novo = self._novo_proximo_reajuste(contrato, referencia)
+                if registro_id is None or novo is None:
+                    continue
+                if self._contrato_repo.atualizar_proximo_reajuste(registro_id, novo) is not None:
+                    atualizados += 1
+        except RepositoryError as exc:
+            raise ControllerError(_MSG_BANCO) from exc
+        finally:
+            self.carregar_historico()
+        return atualizados
+
+    @staticmethod
+    def _novo_proximo_reajuste(contrato: Contrato, referencia: date) -> date | None:
+        """Nova data se o contrato tem data CALCULADA defasada; senão ``None``."""
+        registro = contrato.memoria_extracao.get("reajuste_proximo")
+        inicio = contrato.data_inicio_vigencia
+        if registro is None or registro.origem != OrigemExtracao.REGRA_CALCULADA or inicio is None:
+            return None
+        meses = contrato.reajuste.periodicidade_meses or 12
+        novo = calcular_proximo_reajuste_anual(inicio, meses, referencia)
+        if novo is None or novo.isoformat() == contrato.reajuste.proximo_reajuste:
+            return None
+        return novo
 
     # -- Painel (Relatório 01) --------------------------------------------- #
     @staticmethod

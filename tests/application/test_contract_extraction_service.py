@@ -14,6 +14,7 @@ nenhuma chamada de rede/SDK ocorre. O teste de LLM "real" fica marcado como
 """
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 
 import pytest
@@ -32,6 +33,7 @@ from contract_parser.domain.interpretador import (
     PedidoInterpretacao,
     ResultadoInterpretacao,
 )
+from contract_parser.domain.regras_extracao import CONF_BAIXA
 from tests.support import contract_fixtures as cf
 from tests.support.fakes import FakeInterpretadorLLM
 
@@ -302,3 +304,89 @@ def test_sem_carencia_ou_fonte_de_indice_nao_gera_revisao():
     # gerar revisão no Painel.
     assert memoria["carencia_meses"].necessita_revisao is False
     assert memoria["reajuste_indice_fonte"].necessita_revisao is False
+
+
+# --------------------------------------------------------------------------- #
+# Próximo reajuste CALCULADO (Plano C, Fase 2): sem data explícita no texto, mas
+# com início de vigência conhecido, deriva a data via ``calcular_proximo_reajuste_anual``.
+# O relógio só entra por injeção (``hoje``); sem ele o fallback fica desligado.
+# --------------------------------------------------------------------------- #
+HOJE_FIXO = date(2026, 10, 6)
+
+
+def _hoje() -> date:
+    return HOJE_FIXO
+
+
+TEXTO_INICIO_E_REAJUSTE_ANUAL = (
+    "LOCADOR: Fulano de Tal, CPF 123.456.789-09.\n\n"
+    "O prazo de vigência tem início em 01/03/2024.\n"
+    "O aluguel mensal é de R$ 2.000,00, reajustado pelo IGP-M anualmente."
+)
+TEXTO_INICIO_E_REAJUSTE_SEMESTRAL = (
+    "LOCADOR: Fulano de Tal, CPF 123.456.789-09.\n\n"
+    "O prazo de vigência tem início em 01/03/2024.\n"
+    "O aluguel mensal é de R$ 2.000,00, reajustado pelo IGP-M semestralmente."
+)
+TEXTO_INICIO_E_REAJUSTE_SEM_PERIODICIDADE = (
+    "LOCADOR: Fulano de Tal, CPF 123.456.789-09.\n\n"
+    "O prazo de vigência tem início em 01/03/2024.\n"
+    "O aluguel mensal é de R$ 2.000,00, atualizado pelo IGP-M."
+)
+TEXTO_INICIO_E_PROXIMO_EXPLICITO = (
+    TEXTO_INICIO_E_REAJUSTE_ANUAL + "\nO próximo reajuste em 03/2025."
+)
+TEXTO_REAJUSTE_SEM_INICIO = (
+    "LOCADOR: Fulano de Tal, CPF 123.456.789-09.\n\n"
+    "O aluguel mensal é de R$ 2.000,00, reajustado pelo IGP-M anualmente."
+)
+
+
+def test_proximo_reajuste_calculado_quando_texto_nao_traz_data_explicita():
+    contrato = ExtratorContrato(hoje=_hoje).extrair(TEXTO_INICIO_E_REAJUSTE_ANUAL)
+
+    assert contrato.reajuste.proximo_reajuste == "2027-03-01"
+    registro = contrato.memoria_extracao["reajuste_proximo"]
+    assert registro.origem == OrigemExtracao.REGRA_CALCULADA
+    assert registro.necessita_revisao is True
+    assert registro.confianca == CONF_BAIXA
+    assert "01/03/2024" in registro.detalhe
+    assert "12 meses" in registro.detalhe
+
+
+def test_data_explicita_do_texto_prevalece_sobre_o_calculo():
+    contrato = ExtratorContrato(hoje=_hoje).extrair(TEXTO_INICIO_E_PROXIMO_EXPLICITO)
+
+    assert contrato.reajuste.proximo_reajuste == "2025-03-01"
+    assert contrato.memoria_extracao["reajuste_proximo"].origem == OrigemExtracao.REGRA
+
+
+def test_sem_relogio_injetado_o_calculo_fica_desligado():
+    contrato = ExtratorContrato().extrair(TEXTO_INICIO_E_REAJUSTE_ANUAL)
+
+    assert contrato.reajuste.proximo_reajuste is None
+    assert contrato.memoria_extracao["reajuste_proximo"].origem == OrigemExtracao.NAO_ENCONTRADO
+
+
+def test_sem_data_de_inicio_nao_calcula_proximo_reajuste():
+    contrato = ExtratorContrato(hoje=_hoje).extrair(TEXTO_REAJUSTE_SEM_INICIO)
+
+    assert contrato.reajuste.proximo_reajuste is None
+    assert contrato.memoria_extracao["reajuste_proximo"].origem == OrigemExtracao.NAO_ENCONTRADO
+
+
+def test_calculo_usa_periodicidade_semestral_extraida():
+    contrato = ExtratorContrato(hoje=_hoje).extrair(TEXTO_INICIO_E_REAJUSTE_SEMESTRAL)
+
+    assert contrato.reajuste.periodicidade_meses == 6
+    # início + 5*6 meses = 01/09/2026 < hoje (06/10/2026) → próximo é início + 6*6 meses.
+    assert contrato.reajuste.proximo_reajuste == "2027-03-01"
+    assert "6 meses" in contrato.memoria_extracao["reajuste_proximo"].detalhe
+
+
+def test_calculo_assume_periodicidade_anual_quando_texto_nao_menciona():
+    contrato = ExtratorContrato(hoje=_hoje).extrair(TEXTO_INICIO_E_REAJUSTE_SEM_PERIODICIDADE)
+
+    assert contrato.reajuste.periodicidade_meses is None
+    assert contrato.reajuste.proximo_reajuste == "2027-03-01"
+    assert "12 meses" in contrato.memoria_extracao["reajuste_proximo"].detalhe

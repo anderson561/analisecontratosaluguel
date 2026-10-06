@@ -11,7 +11,7 @@ Dados 100% fictícios (sem PII real).
 from __future__ import annotations
 
 import threading
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -1165,6 +1165,26 @@ def test_app_processar_arquivos_realimenta_painel_e_conformidade():
     assert len(app.relatorio.linhas_painel()) == 1
     assert resultado.contratos == app.processamento.contratos()
     assert ingestor.chamadas_arquivos == [["c1.pdf"]]
+
+
+def test_app_controller_padrao_ja_nasce_com_relogio_para_proximo_reajuste_calculado():
+    texto = (
+        "LOCADOR: Fulano de Tal, CPF 123.456.789-09.\n\n"
+        "O prazo de vigência tem início em 01/03/2024.\n"
+        "O aluguel mensal é de R$ 2.000,00, reajustado pelo IGP-M anualmente."
+    )
+    resumo = IngestaoResumo(
+        total_arquivos=1,
+        processados=1,
+        documentos=[DocumentoTexto(caminho="c1.pdf", hash="h1", texto=texto, metodo="nativo")],
+    )
+    app = AppController(_repo_portfolio(), ingestor=FakeIngestor(resumo))
+    app.processar_pasta("qualquer")
+
+    proximo = app.relatorio.linhas_painel()[0].proximo_reajuste
+
+    assert proximo
+    assert date.fromisoformat(proximo) >= datetime.now().astimezone().date()
 
 
 def test_status_conexao_ok():

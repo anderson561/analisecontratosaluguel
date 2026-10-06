@@ -13,9 +13,11 @@ from pydantic import ValidationError
 
 from contract_parser.domain.contrato import (
     Contrato,
+    OrigemExtracao,
     Parte,
     Prorrogacao,
     Reajuste,
+    RegistroCampo,
     ResponsavelDespesa,
     TipoDespesa,
     TipoParte,
@@ -137,3 +139,18 @@ def test_contrato_carencia_meses_independente_de_prazo_meses():
 
     assert contrato.prazo_meses == 24
     assert contrato.carencia_meses == 2
+
+
+# --------------------------------------------------------------------------- #
+# Origem CALCULADA (Plano C, Fase 2)
+# --------------------------------------------------------------------------- #
+def test_origem_regra_calculada_e_distinta_de_regra_e_faz_round_trip_json():
+    assert OrigemExtracao.REGRA_CALCULADA.value == "regra_calculada"
+    assert OrigemExtracao.REGRA_CALCULADA != OrigemExtracao.REGRA
+
+    registro = RegistroCampo(
+        origem=OrigemExtracao.REGRA_CALCULADA, confianca=0.45, necessita_revisao=True
+    )
+    reidratado = RegistroCampo.model_validate_json(registro.model_dump_json())
+
+    assert reidratado.origem is OrigemExtracao.REGRA_CALCULADA

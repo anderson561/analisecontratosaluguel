@@ -23,6 +23,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -685,7 +686,7 @@ class AppController:
         self.empresas = EmpresasController(repository)
         self.processamento = ProcessamentoController(
             ingestor if ingestor is not None else DirectoryIngestor(_default_extractors()),
-            extrator if extrator is not None else ExtratorContrato(),
+            extrator if extrator is not None else ExtratorContrato(hoje=date.today),
         )
         self.relatorio = RelatorioController(
             relatorio_service if relatorio_service is not None else RelatorioService(repository),

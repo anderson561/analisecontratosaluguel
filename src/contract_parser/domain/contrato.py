@@ -68,6 +68,8 @@ class OrigemExtracao(str, Enum):
 
     REGRA = "regra"  # extrator determinístico (regex/heurística)
     LLM = "llm"  # interpretador de cláusula ambígua (atrás de interface)
+    # valor derivado por cálculo sobre campos estruturados, não extraído literalmente do texto
+    REGRA_CALCULADA = "regra_calculada"
     NAO_ENCONTRADO = "nao_encontrado"  # nenhum extrator resolveu → revisão
 
 

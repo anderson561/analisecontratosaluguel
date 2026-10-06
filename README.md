@@ -2,6 +2,10 @@
 
 Aplicação desktop para leitura, extração e auditoria de contratos de locação em lote (PDF/DOCX), cruzamento com portfólio de empresas, cálculo de IRRF e relatórios profissionais.
 
+[![CI](https://github.com/anderson561/analisecontratosaluguel/actions/workflows/ci.yml/badge.svg)](https://github.com/anderson561/analisecontratosaluguel/actions/workflows/ci.yml)
+· [Releases (`.exe` pronto para uso)](https://github.com/anderson561/analisecontratosaluguel/releases)
+· [Wiki](https://github.com/anderson561/analisecontratosaluguel/wiki)
+
 ## Stack (ver [ADR-001](.agent/specs/adr-001-stack-e-arquitetura.md) + [ADR-002](.agent/specs/adr-002-migracao-mongodb-sqlite.md))
 Python 3.11+ · SQLite (embarcado) · CustomTkinter · Tesseract OCR (por-BRA) · pydantic · pytest (TDD)
 

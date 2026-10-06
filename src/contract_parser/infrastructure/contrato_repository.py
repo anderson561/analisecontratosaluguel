@@ -18,10 +18,16 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-from contract_parser.domain.contrato import Contrato
+from contract_parser.domain.contrato import (
+    Contrato,
+    Parte,
+    ResponsavelDespesa,
+    TipoDespesa,
+)
 from contract_parser.domain.irrf import ResultadoIRRF
 from contract_parser.domain.registro_contrato import RegistroContrato
 from contract_parser.domain.relatorio import LinhaContrato
@@ -41,12 +47,26 @@ def _linha_para_dict(linha: LinhaContrato) -> dict:
         "locatario_nome": linha.locatario_nome,
         "locatario_cnpj": linha.locatario_cnpj,
         "locador_nome": linha.locador_nome,
+        "locadores_adicionais": [
+            p.model_dump(mode="json") for p in linha.locadores_adicionais
+        ],
         "valor_aluguel": str(linha.valor_aluguel) if linha.valor_aluguel is not None else None,
         "irrf": json.loads(linha.irrf.model_dump_json()) if linha.irrf is not None else None,
         "indice": linha.indice,
+        "indice_fonte": linha.indice_fonte,
         "proximo_reajuste": linha.proximo_reajuste,
         "reajuste_automatico": linha.reajuste_automatico,
+        # dict com chave Enum: json.dumps não serializa Enum como chave sem
+        # conversão explícita para str — convertemos tipo/responsável para
+        # ``.value`` aqui e reidratamos de volta em _dict_para_linha.
+        "despesas": {
+            tipo.value: (resp.value if resp is not None else None)
+            for tipo, resp in linha.despesas.items()
+        },
+        "prorrogacao_automatica": linha.prorrogacao_automatica,
+        "prorrogacao_prazo_meses": linha.prorrogacao_prazo_meses,
         "vencimento": linha.vencimento.isoformat() if linha.vencimento is not None else None,
+        "carencia_meses": linha.carencia_meses,
     }
 
 
@@ -59,12 +79,26 @@ def _dict_para_linha(dados: dict) -> LinhaContrato:
         locatario_nome=dados["locatario_nome"],
         locatario_cnpj=dados["locatario_cnpj"],
         locador_nome=dados["locador_nome"],
+        locadores_adicionais=tuple(
+            Parte.model_validate(item) for item in dados["locadores_adicionais"]
+        ),
         valor_aluguel=Decimal(valor_aluguel) if valor_aluguel is not None else None,
         irrf=ResultadoIRRF.model_validate(dados["irrf"]) if dados["irrf"] is not None else None,
         indice=dados["indice"],
+        indice_fonte=dados["indice_fonte"],
         proximo_reajuste=dados["proximo_reajuste"],
         reajuste_automatico=dados["reajuste_automatico"],
+        # Acesso direto (sem .get): init_schema não versiona migração (YAGNI,
+        # ADR-002) e não há base de produção com linha_json antigo para
+        # migrar — mesma convenção dos demais campos acima.
+        despesas={
+            TipoDespesa(k): (ResponsavelDespesa(v) if v is not None else None)
+            for k, v in dados["despesas"].items()
+        },
+        prorrogacao_automatica=dados["prorrogacao_automatica"],
+        prorrogacao_prazo_meses=dados["prorrogacao_prazo_meses"],
         vencimento=date.fromisoformat(vencimento) if vencimento is not None else None,
+        carencia_meses=dados["carencia_meses"],
     )
 
 
@@ -206,6 +240,48 @@ class ContratoRepository:
                 f"Falha ao buscar contrato pelo hash {arquivo_hash}: {exc}"
             ) from exc
         return _from_row(row) if row is not None else None
+
+    def atualizar_proximo_reajuste(
+        self, id: str, novo_valor: date
+    ) -> RegistroContrato | None:
+        """Edição pontual do próximo reajuste (não é o upsert do agregado).
+
+        Reserializa só ``contrato_json`` e ``linha_json``: hash, nome, datas,
+        flags e a ``memoria_extracao`` (origem inclusive) ficam intactos.
+        """
+        try:
+            row = self._conn.execute(
+                "SELECT * FROM contratos WHERE id = ?", (id,)
+            ).fetchone()
+            if row is None:
+                return None
+            registro = _from_row(row)
+            iso = novo_valor.isoformat()
+            contrato = registro.contrato.model_copy(
+                update={
+                    "reajuste": registro.contrato.reajuste.model_copy(
+                        update={"proximo_reajuste": iso}
+                    )
+                }
+            )
+            linha = replace(registro.linha, proximo_reajuste=iso)
+            self._conn.execute(
+                "UPDATE contratos SET contrato_json = ?, linha_json = ? WHERE id = ?",
+                (
+                    contrato.model_dump_json(),
+                    json.dumps(_linha_para_dict(linha), ensure_ascii=False),
+                    id,
+                ),
+            )
+            self._conn.commit()
+            atualizado = self._conn.execute(
+                "SELECT * FROM contratos WHERE id = ?", (id,)
+            ).fetchone()
+        except sqlite3.Error as exc:
+            raise RepositoryError(
+                f"Falha ao atualizar próximo reajuste do contrato {id}: {exc}"
+            ) from exc
+        return _from_row(atualizado)
 
     def excluir(self, id: str) -> bool:
         try:

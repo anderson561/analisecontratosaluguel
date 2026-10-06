@@ -23,6 +23,8 @@ from contract_parser.domain.contrato import (
     ModalidadeGarantia,
     OrigemExtracao,
     Parte,
+    ResponsavelDespesa,
+    TipoDespesa,
     TipoLocacao,
     TipoParte,
 )
@@ -211,6 +213,64 @@ def extrair_locatario(texto: str) -> ResultadoCampo[Parte]:
     return _extrair_parte(texto, _RE_LOCATARIO, _RAIZ_LOCATARIO, _RAIZ_LOCADOR, "LOCATÁRIO")
 
 
+def _normalizar_nome_parte(nome: str) -> str:
+    return re.sub(r"\s+", " ", nome).strip().casefold()
+
+
+def _partes_equivalentes(a: Parte, b: Parte) -> bool:
+    """Compara duas ``Parte`` por VALOR (nunca por posição no texto).
+
+    Documento é o critério mais forte quando ambas o têm; senão, cai para o
+    nome normalizado (espaços colapsados, case-insensitive). Sem documento nem
+    nome em comum não há como afirmar equivalência.
+    """
+    if a.documento and b.documento:
+        return a.documento == b.documento
+    if a.nome and b.nome:
+        return _normalizar_nome_parte(a.nome) == _normalizar_nome_parte(b.nome)
+    return False
+
+
+def extrair_locadores_adicionais(
+    texto: str, locador_principal: Parte
+) -> ResultadoCampo[list[Parte]]:
+    """Locadores ADICIONAIS além do ``locador_principal`` já resolvido.
+
+    Cobre o bug de dois (ou mais) blocos "LOCADOR:" rotulados separados por
+    parágrafo em branco, sem "LOCATÁRIO:" entre eles (co-proprietários pessoa
+    física) — ``extrair_locador`` só enxerga o PRIMEIRO via ``regex.search()``
+    e isso é proposital (compatibilidade total com ``Contrato.locador``/IRRF).
+
+    ``locador_principal`` é recebido como parâmetro EXPLÍCITO — não é
+    redescoberto aqui — porque pode ter vindo do fallback narrativo de
+    ``_extrair_parte`` em vez do primeiro match rotulado; descartar por
+    POSIÇÃO arriscaria apagar um locador real ou deixar passar uma duplicata
+    visual do principal. A exclusão (e a deduplicação interna da própria
+    lista) é sempre por VALOR (``_partes_equivalentes``).
+
+    Escopo deliberadamente restrito ao quadro rotulado (YAGNI): o caso
+    narrativo/prosa com múltiplos locadores fica fora, sem evidência em
+    contratos reais.
+    """
+    t = texto or ""
+    adicionais: list[Parte] = []
+    confiancas: list[float] = []
+    for m in _RE_LOCADOR.finditer(t):
+        res = _parse_parte(m.group(1))
+        if res.valor is None:
+            continue
+        if _partes_equivalentes(res.valor, locador_principal):
+            continue
+        if any(_partes_equivalentes(res.valor, existente) for existente in adicionais):
+            continue
+        adicionais.append(res.valor)
+        confiancas.append(res.confianca)
+
+    if not adicionais:
+        return ResultadoCampo([], CONF_ALTA)  # confirmado: não há locador adicional
+    return ResultadoCampo(adicionais, min(confiancas))
+
+
 # --------------------------------------------------------------------------- #
 # Tipo de locação (residencial × comercial) — pode ser ambíguo (fallback LLM)
 # --------------------------------------------------------------------------- #
@@ -370,10 +430,10 @@ def extrair_garantias(texto: str) -> ResultadoCampo[list[ModalidadeGarantia]]:
 # Vigência: início, fim, prazo (meses), dia de vencimento mensal
 # --------------------------------------------------------------------------- #
 _RE_PERIODO = re.compile(
-    rf"(?:de|in[íi]cio\w*)\s+(?P<inicio>{DATA_REGEX})\s+(?:a|at[ée]|ao)\s+(?P<fim>{DATA_REGEX})",
+    rf"(?:de|in[íi]ci\w*)\s+(?P<inicio>{DATA_REGEX})\s+(?:a|at[ée]|ao)\s+(?P<fim>{DATA_REGEX})",
     re.IGNORECASE,
 )
-_RE_INICIO = re.compile(rf"in[íi]cio\w*[^.\n]{{0,30}}?(?P<d>{DATA_REGEX})", re.IGNORECASE)
+_RE_INICIO = re.compile(rf"in[íi]ci\w*[^.\n]{{0,30}}?(?P<d>{DATA_REGEX})", re.IGNORECASE)
 _RE_FIM = re.compile(
     rf"(?:t[ée]rmino|t[ée]rmin\w*|fim|final|encerr\w*)[^.\n]{{0,30}}?(?P<d>{DATA_REGEX})",
     re.IGNORECASE,
@@ -392,6 +452,17 @@ _RE_MESES_GENERICO = re.compile(
 )
 _RE_PRAZO_EXTENSO = re.compile(
     r"prazo[^.\n]{0,40}?(?:de\s+)?([a-zçãêé]+(?:\s+e\s+[a-zçãêé]+)?)\s+meses",
+    re.IGNORECASE,
+)
+# Prazo em anos: mesma âncora "prazo", convertido para meses (× 12). Tentado
+# SOMENTE como fallback, depois da cascata de meses acima — preserva 100% do
+# comportamento já validado para contratos que já usam "meses".
+_RE_PRAZO_ANOS_ANCORADO = re.compile(
+    r"prazo[^.\n]{0,40}?(\d{1,3})\s*\(?[a-zçãêé\s]*\)?\s*anos",
+    re.IGNORECASE,
+)
+_RE_PRAZO_ANOS_EXTENSO = re.compile(
+    r"prazo[^.\n]{0,40}?(?:de\s+)?([a-zçãêé]+(?:\s+e\s+[a-zçãêé]+)?)\s+anos",
     re.IGNORECASE,
 )
 _RE_VENCIMENTO = re.compile(
@@ -444,7 +515,18 @@ def extrair_prazo_meses(texto: str) -> ResultadoCampo[int]:
         n = numero_por_extenso(m.group(1))
         if n is not None:
             return ResultadoCampo(n, CONF_MEDIA)
-    # 3. Genérico "<n> meses" SEM âncora — último recurso. Pode ser a
+    # 3. Ancorado em "prazo" + dígito + "anos" → mesmo sinal forte da âncora,
+    #    convertido para meses (× 12, conversão exata, sem arredondamento).
+    m = _RE_PRAZO_ANOS_ANCORADO.search(t)
+    if m:
+        return ResultadoCampo(int(m.group(1)) * 12, CONF_ALTA)
+    # 4. Ancorado em "prazo" + número por extenso + "anos" ("cinco anos").
+    m = _RE_PRAZO_ANOS_EXTENSO.search(t)
+    if m:
+        n = numero_por_extenso(m.group(1))
+        if n is not None:
+            return ResultadoCampo(n * 12, CONF_MEDIA)
+    # 5. Genérico "<n> meses" SEM âncora — último recurso. Pode ser a
     #    periodicidade do reajuste, não o prazo: confiança baixa → revisão.
     m = _RE_MESES_GENERICO.search(t)
     if m:
@@ -467,6 +549,40 @@ def extrair_dia_vencimento(texto: str) -> ResultadoCampo[int]:
     if not 1 <= dia <= 31:
         return ResultadoCampo.nao_encontrado(f"dia de vencimento fora de faixa: {dia}")
     return ResultadoCampo(dia, CONF_ALTA)
+
+
+# Ancorada em "carência" (aceita "carencia" sem acento) + dígito + "meses",
+# numa janela curta (mesmo estilo de ``_RE_PERIODICIDADE_MESES``). Lazy para
+# não atravessar até um número distante que não seja o da carência.
+_RE_CARENCIA_MESES = re.compile(
+    r"car[êe]ncia[^.\n]{0,40}?(\d{1,2})\s*(?:\([^)]{0,20}\)\s*)?meses",
+    re.IGNORECASE,
+)
+# Só para distinguir "não mencionado" (caso normal) de "mencionado mas sem
+# valor em meses resolvível" (lacuna real — vai para revisão).
+_RE_CARENCIA_MENCIONADA = re.compile(r"car[êe]ncia", re.IGNORECASE)
+
+
+def extrair_carencia_meses(texto: str) -> ResultadoCampo[int]:
+    """Carência (em meses), ancorada na palavra "carência".
+
+    Três estados distintos (não é uma cascata de fallback como
+    ``extrair_prazo_meses``): (1) valor em meses resolvido -> confiante;
+    (2) palavra "carência" ausente do texto -> caso NORMAL/ESPERADO (a
+    esmagadora maioria dos contratos não tem essa cláusula) — confiante,
+    sem revisão; (3) "carência" mencionada mas sem um valor em meses
+    resolvível (ex.: expressa em dias) -> lacuna real, vai para revisão.
+    Não converte dias -> meses (decisão de arredondamento fora de escopo).
+    """
+    t = texto or ""
+    m = _RE_CARENCIA_MESES.search(t)
+    if m:
+        return ResultadoCampo(int(m.group(1)), CONF_ALTA)
+    if _RE_CARENCIA_MENCIONADA.search(t):
+        return ResultadoCampo.nao_encontrado(
+            "cláusula de carência mencionada mas não expressa em meses — confirmar manualmente"
+        )
+    return ResultadoCampo(None, CONF_ALTA)
 
 
 # --------------------------------------------------------------------------- #
@@ -515,6 +631,41 @@ def extrair_indice_reajuste(texto: str) -> ResultadoCampo[str]:
     return ResultadoCampo.nao_encontrado("índice de reajuste não localizado")
 
 
+# Fontes conhecidas do índice, numa janela curta (~15 chars) logo APÓS a
+# posição do índice canônico — não a janela larga ``[^.\n]{0,40}`` usada em
+# outras regexes deste arquivo, porque isso colaria a fonte de OUTRO índice
+# citado mais adiante na mesma frase à menção atual.
+_RE_INDICE_FONTE = re.compile(r"^\s*/\s*(FGV|IBGE|FIPE|BACEN)\b", re.IGNORECASE)
+
+
+def extrair_indice_fonte(texto: str, indice: str | None) -> ResultadoCampo[str]:
+    """Fonte do índice de reajuste (ex.: "FGV" em "IGP-M/FGV"), ancorada na
+    MESMA menção do ``indice`` canônico já resolvido (via
+    ``extrair_indice_reajuste``) — não em qualquer lugar do texto.
+
+    A grande maioria dos contratos cita só o índice, sem qualificar a fonte
+    explicitamente: esse é o caso NORMAL/ESPERADO, não uma lacuna suspeita
+    (mesmo raciocínio de ``locadores_adicionais``). Por isso a ausência de
+    fonte — índice ``None``, índice não localizado no texto, ou nenhuma fonte
+    reconhecida na janela — devolve ``None`` com ``CONF_ALTA`` (nunca
+    ``nao_encontrado``, que dispararia revisão em massa).
+    """
+    if not indice:
+        return ResultadoCampo(None, CONF_ALTA)
+    t = texto or ""
+    regex_indice = next((regex for nome, regex in _INDICES if nome == indice), None)
+    if regex_indice is None:
+        return ResultadoCampo(None, CONF_ALTA)
+    m_indice = regex_indice.search(t)
+    if not m_indice:
+        return ResultadoCampo(None, CONF_ALTA)
+    janela = t[m_indice.end() : m_indice.end() + 15]
+    m_fonte = _RE_INDICE_FONTE.match(janela)
+    if not m_fonte:
+        return ResultadoCampo(None, CONF_ALTA)
+    return ResultadoCampo(m_fonte.group(1).upper(), CONF_ALTA)
+
+
 def extrair_periodicidade_meses(texto: str) -> ResultadoCampo[int]:
     t = texto or ""
     m = _RE_PERIODICIDADE_MESES.search(t)
@@ -543,3 +694,144 @@ def extrair_proximo_reajuste(texto: str) -> ResultadoCampo[str]:
     if d is None:
         return ResultadoCampo.nao_encontrado("data de próximo reajuste ilegível")
     return ResultadoCampo(d.isoformat(), CONF_MEDIA)
+
+
+# --------------------------------------------------------------------------- #
+# Despesas contratuais: tipo detectado -> responsável mais próximo no texto
+# --------------------------------------------------------------------------- #
+_RE_IPTU = re.compile(r"\bIPTU\b", re.IGNORECASE)
+# Extraordinária/ordinária: a qualificação pode vir antes ou depois de
+# "condomínio" na frase, mas sempre ADJACENTE (poucas palavras de distância).
+# Janela lazy curta (20 chars) é o que evita que a MESMA menção de "condomínio"
+# seja capturada pelas duas regras quando o texto distingue as duas despesas em
+# cláusulas diferentes da mesma frase (ver teste com ambos os tipos) — uma
+# janela larga colaria o primeiro "condomínio" à qualificação da OUTRA
+# cláusula, à frente, no texto. O `\b` antes de "ordin" garante que não casa
+# dentro de "extraordinári..." (não há fronteira de palavra entre o "a" de
+# "extra" e o "o" de "ordin").
+#
+# "condomínio" é capturado num grupo em cada alternativa (ver
+# ``_posicao_ancora``): a proximidade do responsável deve ser medida a partir
+# da PALAVRA "condomínio" em si, não da qualificação — senão, quando as duas
+# cláusulas (ordinária/extraordinária) estão lado a lado na mesma frase, a
+# qualificação da cláusula seguinte fica textualmente mais perto do
+# responsável da cláusula ANTERIOR do que do seu próprio responsável.
+_RE_CONDOMINIO_EXTRAORDINARIO = re.compile(
+    r"extraordin[áa]ri\w*[^.\n]{0,20}?(condom[íi]nio)"
+    r"|(condom[íi]nio)[^.\n]{0,20}?extraordin[áa]ri\w*",
+    re.IGNORECASE,
+)
+_RE_CONDOMINIO_ORDINARIO = re.compile(
+    r"\bordin[áa]ri\w*[^.\n]{0,20}?(condom[íi]nio)"
+    r"|(condom[íi]nio)[^.\n]{0,20}?\bordin[áa]ri\w*",
+    re.IGNORECASE,
+)
+_RE_SEGURO_INCENDIO = re.compile(
+    r"seguro[-\s]?(?:contra\s+|de\s+)?inc[êe]ndio", re.IGNORECASE
+)
+_RE_TAXA_ADMINISTRACAO = re.compile(r"taxa\s+de\s+administra[çc][ãa]o", re.IGNORECASE)
+
+# Tabela de detecção: primeiro casamento de cada tipo vence (mesmo padrão de
+# ``_INDICES``). ``OUTRAS`` não tem regex própria nesta fase (valor de enum
+# disponível para uso manual/futuro).
+_RE_DESPESAS: tuple[tuple[TipoDespesa, re.Pattern[str]], ...] = (
+    (TipoDespesa.IPTU, _RE_IPTU),
+    (TipoDespesa.CONDOMINIO_EXTRAORDINARIO, _RE_CONDOMINIO_EXTRAORDINARIO),
+    (TipoDespesa.CONDOMINIO_ORDINARIO, _RE_CONDOMINIO_ORDINARIO),
+    (TipoDespesa.SEGURO_INCENDIO, _RE_SEGURO_INCENDIO),
+    (TipoDespesa.TAXA_ADMINISTRACAO, _RE_TAXA_ADMINISTRACAO),
+)
+
+_RE_LOCADOR_PROXIMIDADE = re.compile(r"\b" + _RAIZ_LOCADOR + r"\b", re.IGNORECASE)
+_RE_LOCATARIO_PROXIMIDADE = re.compile(r"\b" + _RAIZ_LOCATARIO + r"\b", re.IGNORECASE)
+
+
+def _posicao_ancora(m: re.Match[str]) -> int:
+    """Posição de referência de um match para medir proximidade de responsável.
+
+    Usa o primeiro grupo capturado não-vazio (a "âncora" semântica, ex.: a
+    palavra "condomínio" em si, e não a qualificação ordinária/extraordinária
+    que a acompanha); padrões sem grupos (IPTU, seguro-incêndio, taxa de
+    administração) caem no início do match inteiro.
+    """
+    for i in range(1, (m.re.groups or 0) + 1):
+        if m.group(i) is not None:
+            return m.start(i)
+    return m.start()
+
+
+def _responsavel_proximo(
+    texto: str, posicao: int, alcance: int = 100
+) -> ResponsavelDespesa | None:
+    """Responsável (LOCADOR/LOCATÁRIO) mais próximo de ``posicao`` no texto.
+
+    Procura em uma janela de ``alcance`` chars para cada lado de ``posicao``;
+    devolve ``None`` se nenhum dos dois rótulos aparecer na janela, ou em caso
+    de empate exato de distância (ambíguo demais para decidir).
+    """
+    inicio = max(0, posicao - alcance)
+    janela = texto[inicio : posicao + alcance]
+    pos_rel = posicao - inicio
+
+    def _distancia_minima(regex: re.Pattern[str]) -> int | None:
+        distancias = [abs(m.start() - pos_rel) for m in regex.finditer(janela)]
+        return min(distancias) if distancias else None
+
+    dist_locador = _distancia_minima(_RE_LOCADOR_PROXIMIDADE)
+    dist_locatario = _distancia_minima(_RE_LOCATARIO_PROXIMIDADE)
+
+    if dist_locador is None and dist_locatario is None:
+        return None
+    if dist_locatario is None or (dist_locador is not None and dist_locador < dist_locatario):
+        return ResponsavelDespesa.LOCADOR
+    if dist_locador is None or dist_locatario < dist_locador:
+        return ResponsavelDespesa.LOCATARIO
+    return None  # empate exato — ambíguo demais para decidir
+
+
+def extrair_despesas(
+    texto: str,
+) -> ResultadoCampo[dict[TipoDespesa, ResponsavelDespesa | None]]:
+    t = texto or ""
+    despesas: dict[TipoDespesa, ResponsavelDespesa | None] = {}
+    for tipo, regex in _RE_DESPESAS:
+        m = regex.search(t)
+        if m:
+            despesas[tipo] = _responsavel_proximo(t, _posicao_ancora(m))
+    if not despesas:
+        return ResultadoCampo.nao_encontrado("nenhuma despesa detectada")
+    return ResultadoCampo(despesas, CONF_ALTA)
+
+
+# --------------------------------------------------------------------------- #
+# Prorrogação/renovação: flag automática + prazo (conceito distinto do prazo
+# original do contrato — não reaproveita as regras de ``extrair_prazo_meses``)
+# --------------------------------------------------------------------------- #
+_RE_PRORROGACAO_AUTOMATICA = re.compile(
+    r"prorrog\w*[^.\n]{0,40}?automat\w*"
+    r"|renova\w*[^.\n]{0,40}?automat\w*"
+    r"|automat\w*[^.\n]{0,40}?(?:prorrog|renova)\w*"
+    r"|prazo\s+indetermin\w*",
+    re.IGNORECASE,
+)
+_RE_PRORROGACAO_PRAZO_MESES = re.compile(
+    r"(?:prorrog|renova)\w*[^.\n]{0,60}?(\d{1,3})\s*\(?[a-zçãêé\s]*\)?\s*meses",
+    re.IGNORECASE,
+)
+
+
+def extrair_prorrogacao_automatica(texto: str) -> ResultadoCampo[bool]:
+    """Flag booleana. Réplica de ``extrair_reajuste_automatico``: ausência de
+    menção é interpretada como ``False`` (confiança baixa → sinaliza revisão)."""
+    if _RE_PRORROGACAO_AUTOMATICA.search(texto or ""):
+        return ResultadoCampo(True, CONF_ALTA)
+    return ResultadoCampo(False, CONF_BAIXA, detalhe="prorrogação automática não mencionada")
+
+
+def extrair_prorrogacao_prazo_meses(texto: str) -> ResultadoCampo[int]:
+    """Prazo (em meses) da PRORROGAÇÃO — nunca inferido do prazo original do
+    contrato: se o número não estiver explícito junto à âncora, fica ausente."""
+    m = _RE_PRORROGACAO_PRAZO_MESES.search(texto or "")
+    if not m:
+        return ResultadoCampo.nao_encontrado("prazo de prorrogação não localizado")
+    return ResultadoCampo(int(m.group(1)), CONF_ALTA)

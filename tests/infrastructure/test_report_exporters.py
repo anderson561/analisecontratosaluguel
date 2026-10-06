@@ -10,7 +10,7 @@ from decimal import Decimal
 
 import pytest
 
-from contract_parser.domain.contrato import TipoParte
+from contract_parser.domain.contrato import Parte, ResponsavelDespesa, TipoDespesa, TipoParte
 from contract_parser.domain.irrf import calcular_irrf, tabela_irrf_2026
 from contract_parser.domain.relatorio import (
     LinhaContrato,
@@ -22,9 +22,16 @@ from contract_parser.infrastructure.report_exporters import (
     CABECALHOS_CONTRATOS,
     ExcelRelatorioExporter,
     PdfRelatorioExporter,
+    formatar_carencia_meses,
     formatar_data_br,
+    formatar_despesas,
+    formatar_locadores_adicionais,
     formatar_moeda_brl,
+    formatar_prorrogacao,
+    linha_para_celulas,
 )
+
+NOME_LOCADOR_ADICIONAL = "Fulano de Tal"
 
 PENDENCIA = "Contrato da Empresa Gamma Holding SA / 00000000000388 não encontrado"
 
@@ -42,23 +49,37 @@ def _relatorio() -> Relatorio:
             locatario_nome="Alpha Comercio LTDA",
             locatario_cnpj="00000000000159",
             locador_nome="João da Silva",
+            locadores_adicionais=(
+                Parte(tipo=TipoParte.PF, nome=NOME_LOCADOR_ADICIONAL, documento="00000000000"),
+            ),
             valor_aluguel=Decimal("5000.00"),
             irrf=irrf_pf,
             indice="IPCA",
+            indice_fonte="FGV",
             proximo_reajuste="10/2026",
             reajuste_automatico=True,
+            despesas={TipoDespesa.IPTU: ResponsavelDespesa.LOCATARIO},
+            prorrogacao_automatica=True,
+            prorrogacao_prazo_meses=12,
             vencimento=date(2028, 10, 10),
+            carencia_meses=2,
         ),
         LinhaContrato(
             locatario_nome="Beta Servicos ME",
             locatario_cnpj="00000000000230",
             locador_nome="Imobiliaria XPTO LTDA",
+            locadores_adicionais=(),
             valor_aluguel=Decimal("8000.00"),
             irrf=irrf_pj,
             indice="IGP-M",
+            indice_fonte=None,
             proximo_reajuste="05/2026",
             reajuste_automatico=False,
+            despesas={},
+            prorrogacao_automatica=False,
+            prorrogacao_prazo_meses=None,
             vencimento=date(2027, 5, 1),
+            carencia_meses=None,
         ),
     ]
     return Relatorio(
@@ -94,6 +115,111 @@ def test_formatar_data_br():
     assert formatar_data_br(None) == ""
 
 
+def test_formatar_despesas_vazio():
+    assert formatar_despesas({}) == ""
+
+
+def test_formatar_despesas_um_item():
+    assert (
+        formatar_despesas({TipoDespesa.IPTU: ResponsavelDespesa.LOCATARIO})
+        == "IPTU: Locatário"
+    )
+
+
+def test_formatar_despesas_multiplos_itens_na_ordem_do_enum():
+    # Dict montado FORA de ordem (OUTRAS antes de IPTU) para provar que a
+    # saída segue a ordem de DECLARAÇÃO de TipoDespesa, não a de inserção.
+    despesas = {
+        TipoDespesa.OUTRAS: ResponsavelDespesa.LOCADOR,
+        TipoDespesa.IPTU: ResponsavelDespesa.LOCATARIO,
+    }
+    assert formatar_despesas(despesas) == "IPTU: Locatário; Outras: Locador"
+
+
+def test_formatar_despesas_responsavel_none():
+    assert (
+        formatar_despesas({TipoDespesa.IPTU: None}) == "IPTU: não identificado"
+    )
+
+
+@pytest.mark.parametrize(
+    ("automatica", "prazo_meses", "esperado"),
+    [
+        (False, None, "Não"),
+        (False, 12, "Não"),
+        (True, None, "Sim"),
+        (True, 12, "Sim (12 meses)"),
+    ],
+)
+def test_formatar_prorrogacao(automatica, prazo_meses, esperado):
+    assert formatar_prorrogacao(automatica, prazo_meses) == esperado
+
+
+def test_formatar_locadores_adicionais_vazio():
+    assert formatar_locadores_adicionais(()) == ""
+
+
+def test_formatar_locadores_adicionais_um_item():
+    locadores = (Parte(tipo=TipoParte.PF, nome="Fulano de Tal", documento="00000000000"),)
+    assert formatar_locadores_adicionais(locadores) == "Fulano de Tal"
+
+
+def test_formatar_locadores_adicionais_multiplos_itens_na_ordem_da_tupla():
+    locadores = (
+        Parte(tipo=TipoParte.PF, nome="Fulano de Tal", documento="00000000000"),
+        Parte(tipo=TipoParte.PJ, nome="Beltrano Empreendimentos LTDA", documento="00000000000191"),
+    )
+    assert (
+        formatar_locadores_adicionais(locadores)
+        == "Fulano de Tal; Beltrano Empreendimentos LTDA"
+    )
+
+
+def test_formatar_locadores_adicionais_sem_nome_usa_fallback():
+    locadores = (Parte(tipo=TipoParte.PF, nome=None, documento="00000000000"),)
+    assert formatar_locadores_adicionais(locadores) == "(sem nome identificado)"
+
+
+@pytest.mark.parametrize(
+    ("carencia_meses", "esperado"),
+    [
+        (None, ""),
+        (2, "2 meses"),
+    ],
+)
+def test_formatar_carencia_meses(carencia_meses, esperado):
+    assert formatar_carencia_meses(carencia_meses) == esperado
+
+
+def test_linha_para_celulas_inclui_despesas_e_prorrogacao_no_final():
+    linha = LinhaContrato(
+        locatario_nome="Alpha Comercio LTDA",
+        locatario_cnpj="00000000000159",
+        locador_nome="João da Silva",
+        locadores_adicionais=(
+            Parte(tipo=TipoParte.PF, nome=NOME_LOCADOR_ADICIONAL, documento="00000000000"),
+        ),
+        valor_aluguel=Decimal("5000.00"),
+        irrf=None,
+        indice="IPCA",
+        indice_fonte=None,
+        proximo_reajuste="10/2026",
+        reajuste_automatico=True,
+        despesas={TipoDespesa.IPTU: ResponsavelDespesa.LOCATARIO},
+        prorrogacao_automatica=True,
+        prorrogacao_prazo_meses=12,
+        vencimento=date(2028, 10, 10),
+        carencia_meses=None,
+    )
+    celulas = linha_para_celulas(linha)
+    assert len(celulas) == 15
+    assert celulas[7] == ""  # indice_fonte ausente
+    assert celulas[11] == ""  # carencia_meses ausente
+    assert celulas[12] == "IPTU: Locatário"
+    assert celulas[13] == "Sim (12 meses)"
+    assert celulas[14] == NOME_LOCADOR_ADICIONAL
+
+
 # --------------------------------------------------------------------------- #
 # Excel
 # --------------------------------------------------------------------------- #
@@ -120,11 +246,28 @@ def test_excel_gera_duas_abas_com_cabecalhos_e_valores(tmp_path):
     assert contratos["E2"].value == "R$ 0,00"
     # Coluna nova: valor da redução aplicada (igual à tabela nesta base: 312,89).
     assert contratos["F2"].value == "R$ 312,89"
-    assert contratos["I2"].value == "Sim"
-    assert contratos["J2"].value == "10/10/2028"
+    # Coluna nova: fonte do índice da linha Alpha.
+    assert contratos["H2"].value == "FGV"
+    assert contratos["J2"].value == "Sim"
+    assert contratos["K2"].value == "10/10/2028"
+    # Coluna nova: carência da linha Alpha.
+    assert contratos["L2"].value == "2 meses"
+    # Colunas novas (Despesas/Prorrogação) da linha Alpha.
+    assert contratos["M2"].value == "IPTU: Locatário"
+    assert contratos["N2"].value == "Sim (12 meses)"
+    # Coluna nova: locador adicional da linha Alpha.
+    assert contratos["O2"].value == NOME_LOCADOR_ADICIONAL
     # Locador PJ ⇒ IRRF R$ 0,00 e nenhuma redução.
     assert contratos["E3"].value == "R$ 0,00"
     assert contratos["F3"].value == "R$ 0,00"
+    # Beta não tem fonte do índice nem carência registradas (openpyxl grava
+    # string vazia como cela em branco, que volta como None na releitura).
+    assert contratos["H3"].value is None
+    assert contratos["L3"].value is None
+    # Beta não tem despesas/prorrogação registradas (mesmo motivo acima).
+    assert contratos["M3"].value is None
+    assert contratos["N3"].value == "Não"
+    assert contratos["O3"].value is None
 
     # Rodapé: total de IRRF retido (0,00 + 0,00) e total de redução (312,89 + 0,00).
     linhas_valores = list(contratos.iter_rows(values_only=True))
@@ -176,6 +319,13 @@ def test_pdf_gera_arquivo_nao_trivial_com_texto_esperado(tmp_path):
     # Coluna nova: valor da redução aplicada (igual à tabela nesta base: 312,89).
     assert "Redução IRRF" in texto
     assert "R$ 312,89" in texto
+    # Colunas novas: despesas e prorrogação da linha Alpha.
+    assert "Locatário" in texto
+    assert "12 meses)" in texto
+    assert NOME_LOCADOR_ADICIONAL in texto
+    # Colunas novas: fonte do índice e carência da linha Alpha.
+    assert "FGV" in texto
+    assert "2 meses" in texto
     assert PENDENCIA in texto
 
 

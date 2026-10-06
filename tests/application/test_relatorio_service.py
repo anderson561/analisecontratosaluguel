@@ -13,7 +13,10 @@ from contract_parser.application.relatorio_service import RelatorioService
 from contract_parser.domain.contrato import (
     Contrato,
     Parte,
+    Prorrogacao,
     Reajuste,
+    ResponsavelDespesa,
+    TipoDespesa,
     TipoParte,
 )
 from contract_parser.domain.empresa import Empresa
@@ -176,6 +179,84 @@ def test_relatorio02_totais_e_pendencia_com_mensagem_exata():
     assert conf.pendencias == [
         f"Contrato da Empresa Gamma Holding SA / {CNPJ_C} não encontrado"
     ]
+
+
+def test_relatorio01_linha_leva_despesas_e_prorrogacao_do_contrato():
+    """Passthrough: despesas/prorrogacao do Contrato vão crus para a linha."""
+    contrato = _contrato_pf_pj().model_copy(
+        update={
+            "despesas": {
+                TipoDespesa.IPTU: ResponsavelDespesa.LOCADOR,
+                TipoDespesa.CONDOMINIO_ORDINARIO: None,
+            },
+            "prorrogacao": Prorrogacao(automatica=True, prazo_meses=12),
+        }
+    )
+    relatorio = RelatorioService(_repo()).montar([contrato])
+    linha = relatorio.contratos.linhas[0]
+
+    assert linha.despesas == {
+        TipoDespesa.IPTU: ResponsavelDespesa.LOCADOR,
+        TipoDespesa.CONDOMINIO_ORDINARIO: None,
+    }
+    assert linha.prorrogacao_automatica is True
+    assert linha.prorrogacao_prazo_meses == 12
+
+
+def test_relatorio01_linha_prorrogacao_default_quando_contrato_nao_informa():
+    relatorio = RelatorioService(_repo()).montar([_contrato_pf_pj()])
+    linha = relatorio.contratos.linhas[0]
+
+    assert linha.despesas == {}
+    assert linha.prorrogacao_automatica is False
+    assert linha.prorrogacao_prazo_meses is None
+
+
+def test_relatorio01_linha_leva_locadores_adicionais_do_contrato():
+    """Passthrough: locadores_adicionais do Contrato vão crus para a linha."""
+    locadores_adicionais = [
+        Parte(tipo=TipoParte.PF, nome="Maria Souza", documento="22222222222"),
+        Parte(tipo=TipoParte.PF, nome="Pedro Alves", documento="33333333333"),
+    ]
+    contrato = _contrato_pf_pj().model_copy(
+        update={"locadores_adicionais": locadores_adicionais}
+    )
+    relatorio = RelatorioService(_repo()).montar([contrato])
+    linha = relatorio.contratos.linhas[0]
+
+    assert linha.locadores_adicionais == tuple(locadores_adicionais)
+
+
+def test_relatorio01_linha_locadores_adicionais_default_vazio():
+    relatorio = RelatorioService(_repo()).montar([_contrato_pf_pj()])
+    linha = relatorio.contratos.linhas[0]
+
+    assert linha.locadores_adicionais == ()
+
+
+def test_relatorio01_linha_leva_indice_fonte_e_carencia_do_contrato():
+    """Passthrough: indice_fonte (Reajuste) e carencia_meses (Contrato) crus."""
+    contrato = _contrato_pf_pj().model_copy(
+        update={
+            "reajuste": Reajuste(
+                indice="IGP-M", indice_fonte="FGV", proximo_reajuste="10/2026", automatico=True
+            ),
+            "carencia_meses": 2,
+        }
+    )
+    relatorio = RelatorioService(_repo()).montar([contrato])
+    linha = relatorio.contratos.linhas[0]
+
+    assert linha.indice_fonte == "FGV"
+    assert linha.carencia_meses == 2
+
+
+def test_relatorio01_linha_indice_fonte_e_carencia_default_none():
+    relatorio = RelatorioService(_repo()).montar([_contrato_pf_pj()])
+    linha = relatorio.contratos.linhas[0]
+
+    assert linha.indice_fonte is None
+    assert linha.carencia_meses is None
 
 
 def test_montagem_completa_agrega_os_dois_relatorios():

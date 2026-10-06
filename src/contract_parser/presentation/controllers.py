@@ -23,6 +23,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -41,9 +42,10 @@ from contract_parser.application.empresa_importer import (
 )
 from contract_parser.application.empresa_service import EmpresaService
 from contract_parser.application.relatorio_service import RelatorioService
-from contract_parser.domain.contrato import Contrato
+from contract_parser.domain.contrato import Contrato, OrigemExtracao
 from contract_parser.domain.documento_texto import DocumentoTexto
 from contract_parser.domain.empresa import Empresa
+from contract_parser.domain.reajuste_calc import calcular_proximo_reajuste_anual
 from contract_parser.domain.relatorio import LinhaContrato, Relatorio, ResumoConformidade
 from contract_parser.domain.repositories import (
     ContratoRepositoryProtocol,
@@ -56,8 +58,12 @@ from contract_parser.infrastructure.empresa_repository import EmpresaJaExisteErr
 from contract_parser.infrastructure.report_exporters import (
     ExcelRelatorioExporter,
     PdfRelatorioExporter,
+    formatar_carencia_meses,
     formatar_data_br,
+    formatar_despesas,
+    formatar_locadores_adicionais,
     formatar_moeda_brl,
+    formatar_prorrogacao,
 )
 
 
@@ -115,13 +121,18 @@ class LinhaPainel:
 
     locatario: str
     locador: str
+    locadores_adicionais: str
     valor: str
     irrf: str
     reducao_irrf: str
     indice: str
+    indice_fonte: str
     proximo_reajuste: str
     automatico: str
     vencimento: str
+    carencia: str
+    despesas: str
+    prorrogacao: str
     revisao: bool
     motivo_revisao: str
     registro_id: str | None
@@ -513,6 +524,48 @@ class RelatorioController:
         self.carregar_historico()
         return total
 
+    def atualizar_proximos_reajustes(self, *, referencia: date | None = None) -> int:
+        """Recalcula e persiste o próximo reajuste dos contratos com data CALCULADA.
+
+        Só toca contratos cuja ``origem`` é ``REGRA_CALCULADA`` (a data
+        "envelhece" com o tempo); a data extraída do texto nunca é
+        sobrescrita. Este é o ponto autorizado a ler o relógio
+        (``date.today()``). Síncrono de propósito: volume baixo, escrita
+        SQLite local. Devolve quantos contratos foram efetivamente
+        atualizados; o Painel é recarregado sempre, mesmo se o banco falhar
+        no meio (as gravações anteriores à falha aparecem).
+        """
+        if self._contrato_repo is None:
+            raise ControllerError("Sem repositório de contratos configurado.")
+        if referencia is None:
+            referencia = date.today()  # noqa: DTZ011 - "hoje" local do usuário (app desktop)
+        atualizados = 0
+        try:
+            for _, contrato, registro_id in self._pares:
+                novo = self._novo_proximo_reajuste(contrato, referencia)
+                if registro_id is None or novo is None:
+                    continue
+                if self._contrato_repo.atualizar_proximo_reajuste(registro_id, novo) is not None:
+                    atualizados += 1
+        except RepositoryError as exc:
+            raise ControllerError(_MSG_BANCO) from exc
+        finally:
+            self.carregar_historico()
+        return atualizados
+
+    @staticmethod
+    def _novo_proximo_reajuste(contrato: Contrato, referencia: date) -> date | None:
+        """Nova data se o contrato tem data CALCULADA defasada; senão ``None``."""
+        registro = contrato.memoria_extracao.get("reajuste_proximo")
+        inicio = contrato.data_inicio_vigencia
+        if registro is None or registro.origem != OrigemExtracao.REGRA_CALCULADA or inicio is None:
+            return None
+        meses = contrato.reajuste.periodicidade_meses or 12
+        novo = calcular_proximo_reajuste_anual(inicio, meses, referencia)
+        if novo is None or novo.isoformat() == contrato.reajuste.proximo_reajuste:
+            return None
+        return novo
+
     # -- Painel (Relatório 01) --------------------------------------------- #
     @staticmethod
     def _precisa_revisao(linha: LinhaContrato, contrato: Contrato) -> bool:
@@ -545,13 +598,20 @@ class RelatorioController:
         return LinhaPainel(
             locatario=linha.locatario_nome or "",
             locador=linha.locador_nome or "",
+            locadores_adicionais=formatar_locadores_adicionais(linha.locadores_adicionais),
             valor=formatar_moeda_brl(linha.valor_aluguel),
             irrf=formatar_moeda_brl(linha.irrf_retido),
             reducao_irrf=formatar_moeda_brl(linha.reducao_irrf),
             indice=linha.indice or "",
+            indice_fonte=linha.indice_fonte or "",
             proximo_reajuste=linha.proximo_reajuste or "",
             automatico=_sim_nao(linha.reajuste_automatico),
             vencimento=formatar_data_br(linha.vencimento),
+            carencia=formatar_carencia_meses(linha.carencia_meses),
+            despesas=formatar_despesas(linha.despesas),
+            prorrogacao=formatar_prorrogacao(
+                linha.prorrogacao_automatica, linha.prorrogacao_prazo_meses
+            ),
             revisao=RelatorioController._precisa_revisao(linha, contrato),
             motivo_revisao=RelatorioController._motivo_revisao(linha, contrato),
             registro_id=registro_id,
@@ -669,7 +729,7 @@ class AppController:
         self.empresas = EmpresasController(repository)
         self.processamento = ProcessamentoController(
             ingestor if ingestor is not None else DirectoryIngestor(_default_extractors()),
-            extrator if extrator is not None else ExtratorContrato(),
+            extrator if extrator is not None else ExtratorContrato(hoje=date.today),
         )
         self.relatorio = RelatorioController(
             relatorio_service if relatorio_service is not None else RelatorioService(repository),

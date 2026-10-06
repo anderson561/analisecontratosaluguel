@@ -12,12 +12,15 @@ por campo ausente (campos não encontrados viram "revisão", não erro).
 """
 from __future__ import annotations
 
+from collections.abc import Callable
+from datetime import date
 from typing import Any
 
 from contract_parser.domain import regras_extracao as regras
 from contract_parser.domain.contrato import (
     Contrato,
     OrigemExtracao,
+    Prorrogacao,
     Reajuste,
     RegistroCampo,
     TipoLocacao,
@@ -26,7 +29,12 @@ from contract_parser.domain.interpretador import (
     InterpretadorClausula,
     PedidoInterpretacao,
 )
-from contract_parser.domain.regras_extracao import LIMIAR_REVISAO, ResultadoCampo
+from contract_parser.domain.reajuste_calc import calcular_proximo_reajuste_anual
+from contract_parser.domain.regras_extracao import (
+    CONF_BAIXA,
+    LIMIAR_REVISAO,
+    ResultadoCampo,
+)
 from contract_parser.domain.regras_juridicas import avaliar_flags
 
 
@@ -36,10 +44,20 @@ class ExtratorContrato:
     ``interpretador`` (opcional) resolve cláusulas ambíguas quando as regras
     falham. Se ``None`` (ou se ele falhar), o campo ambíguo é apenas marcado para
     revisão — a extração nunca quebra por falta de LLM.
+
+    ``hoje`` (opcional) é o relógio injetado: função sem argumentos que devolve a data
+    de referência, avaliada a cada extração. Sem ele, a extração é puramente
+    determinística e a data do próximo reajuste ausente no texto NÃO é calculada.
     """
 
-    def __init__(self, interpretador: InterpretadorClausula | None = None) -> None:
+    def __init__(
+        self,
+        interpretador: InterpretadorClausula | None = None,
+        *,
+        hoje: Callable[[], date] | None = None,
+    ) -> None:
         self._interpretador = interpretador
+        self._hoje = hoje
 
     # ------------------------------------------------------------------ #
     # API pública
@@ -49,6 +67,11 @@ class ExtratorContrato:
         memoria: dict[str, RegistroCampo] = {}
 
         locador = self._registrar(memoria, "locador", regras.extrair_locador(texto))
+        locadores_adicionais = self._registrar(
+            memoria,
+            "locadores_adicionais",
+            regras.extrair_locadores_adicionais(texto, locador or regras.Parte()),
+        )
         locatario = self._registrar(memoria, "locatario", regras.extrair_locatario(texto))
 
         valor_aluguel = self._registrar(
@@ -67,11 +90,17 @@ class ExtratorContrato:
         )
         data_fim = self._registrar(memoria, "data_fim_vigencia", regras.extrair_data_fim(texto))
         prazo = self._registrar(memoria, "prazo_meses", regras.extrair_prazo_meses(texto))
+        carencia = self._registrar(
+            memoria, "carencia_meses", regras.extrair_carencia_meses(texto)
+        )
         dia_venc = self._registrar(
             memoria, "dia_vencimento_mensal", regras.extrair_dia_vencimento(texto)
         )
 
-        reajuste = self._montar_reajuste(memoria, texto)
+        reajuste = self._montar_reajuste(memoria, texto, data_inicio)
+        prorrogacao = self._montar_prorrogacao(memoria, texto)
+
+        despesas = self._registrar(memoria, "despesas", regras.extrair_despesas(texto))
 
         # Campo AMBÍGUO: regra primeiro; só recorre ao interpretador (LLM) se a
         # regra não resolver com confiança suficiente.
@@ -87,6 +116,7 @@ class ExtratorContrato:
 
         return Contrato(
             locador=locador or regras.Parte(),
+            locadores_adicionais=locadores_adicionais or [],
             locatario=locatario or regras.Parte(),
             tipo_locacao=tipo_locacao,
             valor_aluguel=valor_aluguel,
@@ -96,7 +126,10 @@ class ExtratorContrato:
             data_fim_vigencia=data_fim,
             prazo_meses=prazo,
             dia_vencimento_mensal=dia_venc,
+            carencia_meses=carencia,
             reajuste=reajuste,
+            despesas=despesas or {},
+            prorrogacao=prorrogacao,
             flags=flags,
             memoria_extracao=memoria,
         )
@@ -121,23 +154,60 @@ class ExtratorContrato:
         )
         return resultado.valor
 
-    def _montar_reajuste(self, memoria: dict[str, RegistroCampo], texto: str) -> Reajuste:
+    def _montar_reajuste(
+        self, memoria: dict[str, RegistroCampo], texto: str, data_inicio: date | None
+    ) -> Reajuste:
         indice = self._registrar(memoria, "reajuste_indice", regras.extrair_indice_reajuste(texto))
+        indice_fonte = self._registrar(
+            memoria, "reajuste_indice_fonte", regras.extrair_indice_fonte(texto, indice)
+        )
         periodicidade = self._registrar(
             memoria, "reajuste_periodicidade", regras.extrair_periodicidade_meses(texto)
         )
         proximo = self._registrar(
-            memoria, "reajuste_proximo", regras.extrair_proximo_reajuste(texto)
+            memoria,
+            "reajuste_proximo",
+            self._resolver_proximo_reajuste(texto, data_inicio, periodicidade),
         )
         automatico = self._registrar(
             memoria, "reajuste_automatico", regras.extrair_reajuste_automatico(texto)
         )
         return Reajuste(
             indice=indice,
+            indice_fonte=indice_fonte,
             periodicidade_meses=periodicidade,
             proximo_reajuste=proximo,
             automatico=bool(automatico),
         )
+
+    def _resolver_proximo_reajuste(
+        self, texto: str, data_inicio: date | None, periodicidade: int | None
+    ) -> ResultadoCampo[str]:
+        """Data explícita do texto prevalece; senão, calcula a partir do início (se há relógio)."""
+        resultado = regras.extrair_proximo_reajuste(texto)
+        if resultado.valor is not None or self._hoje is None or data_inicio is None:
+            return resultado
+
+        meses = periodicidade or 12
+        calculada = calcular_proximo_reajuste_anual(data_inicio, meses, self._hoje())
+        if calculada is None:
+            return resultado
+        return ResultadoCampo(
+            calculada.isoformat(),
+            CONF_BAIXA,
+            OrigemExtracao.REGRA_CALCULADA,
+            f"calculado a partir da data de início ({data_inicio:%d/%m/%Y}), "
+            f"assumindo reajuste a cada {meses} meses",
+        )
+
+    def _montar_prorrogacao(self, memoria: dict[str, RegistroCampo], texto: str) -> Prorrogacao:
+        automatica = self._registrar(
+            memoria, "prorrogacao_automatica", regras.extrair_prorrogacao_automatica(texto)
+        )
+        prazo = self._registrar(
+            memoria, "prorrogacao_prazo_meses", regras.extrair_prorrogacao_prazo_meses(texto)
+        )
+        return Prorrogacao(automatica=bool(automatica), prazo_meses=prazo)
 
     def _resolver_tipo_locacao(
         self, memoria: dict[str, RegistroCampo], texto: str

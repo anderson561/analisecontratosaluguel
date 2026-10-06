@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
+from contract_parser.domain.contrato import Parte, ResponsavelDespesa, TipoDespesa, TipoParte
 from contract_parser.domain.irrf import ResultadoIRRF
 from contract_parser.domain.relatorio import LinhaContrato, RelatorioContratos
 
@@ -35,13 +36,75 @@ def _linha(irrf: ResultadoIRRF | None) -> LinhaContrato:
         locatario_nome="Alpha Comercio LTDA",
         locatario_cnpj="00000000000159",
         locador_nome="João da Silva",
+        locadores_adicionais=(),
         valor_aluguel=Decimal("5000.00"),
         irrf=irrf,
         indice="IPCA",
+        indice_fonte=None,
         proximo_reajuste="10/2026",
         reajuste_automatico=True,
+        despesas={},
+        prorrogacao_automatica=False,
+        prorrogacao_prazo_meses=None,
         vencimento=date(2028, 10, 10),
+        carencia_meses=None,
     )
+
+
+def test_linha_contrato_aceita_despesas_e_prorrogacao():
+    linha = LinhaContrato(
+        locatario_nome="Alpha Comercio LTDA",
+        locatario_cnpj="00000000000159",
+        locador_nome="João da Silva",
+        locadores_adicionais=(),
+        valor_aluguel=Decimal("5000.00"),
+        irrf=None,
+        indice="IPCA",
+        indice_fonte=None,
+        proximo_reajuste="10/2026",
+        reajuste_automatico=True,
+        despesas={
+            TipoDespesa.IPTU: ResponsavelDespesa.LOCADOR,
+            TipoDespesa.CONDOMINIO_ORDINARIO: ResponsavelDespesa.LOCATARIO,
+            TipoDespesa.OUTRAS: None,
+        },
+        prorrogacao_automatica=True,
+        prorrogacao_prazo_meses=12,
+        vencimento=date(2028, 10, 10),
+        carencia_meses=None,
+    )
+    assert linha.despesas == {
+        TipoDespesa.IPTU: ResponsavelDespesa.LOCADOR,
+        TipoDespesa.CONDOMINIO_ORDINARIO: ResponsavelDespesa.LOCATARIO,
+        TipoDespesa.OUTRAS: None,
+    }
+    assert linha.prorrogacao_automatica is True
+    assert linha.prorrogacao_prazo_meses == 12
+
+
+def test_linha_contrato_aceita_locadores_adicionais():
+    locadores_adicionais = (
+        Parte(tipo=TipoParte.PF, nome="Maria Souza", documento="22222222222"),
+        Parte(tipo=TipoParte.PF, nome="Pedro Alves", documento="33333333333"),
+    )
+    linha = LinhaContrato(
+        locatario_nome="Alpha Comercio LTDA",
+        locatario_cnpj="00000000000159",
+        locador_nome="João da Silva",
+        locadores_adicionais=locadores_adicionais,
+        valor_aluguel=Decimal("5000.00"),
+        irrf=None,
+        indice="IPCA",
+        indice_fonte=None,
+        proximo_reajuste="10/2026",
+        reajuste_automatico=True,
+        despesas={},
+        prorrogacao_automatica=False,
+        prorrogacao_prazo_meses=None,
+        vencimento=date(2028, 10, 10),
+        carencia_meses=None,
+    )
+    assert linha.locadores_adicionais == locadores_adicionais
 
 
 def test_reducao_irrf_expoe_o_valor_reduzido_pela_lei_15270():

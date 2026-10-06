@@ -17,7 +17,14 @@ from decimal import Decimal
 import pytest
 
 from contract_parser.domain import regras_extracao as R
-from contract_parser.domain.contrato import ModalidadeGarantia, TipoLocacao, TipoParte
+from contract_parser.domain.contrato import (
+    ModalidadeGarantia,
+    Parte,
+    ResponsavelDespesa,
+    TipoDespesa,
+    TipoLocacao,
+    TipoParte,
+)
 from contract_parser.domain.regras_extracao import CONF_ALTA, CONF_BAIXA, CONF_MEDIA
 
 
@@ -113,6 +120,76 @@ def test_parte_narrativa_como_locador_deduz_pj_por_cnpj():
     assert lct.valor.tipo == TipoParte.PJ
     assert lct.valor.nome == "BETA CONSTRUTORA LTDA"
     assert lct.valor.documento == "33555666000165"
+
+
+# --------------------------------------------------------------------------- #
+# Locadores adicionais (Plano A, Fase 2) — múltiplos blocos "LOCADOR:" no
+# quadro rotulado, sem "LOCATÁRIO:" entre eles (co-proprietários PF).
+# --------------------------------------------------------------------------- #
+def test_locadores_adicionais_dois_blocos_sem_locatario_entre_eles():
+    # Bug real: duas pessoas físicas co-proprietárias, dois blocos "LOCADOR:"
+    # separados por parágrafo em branco, SEM "LOCATÁRIO:" entre eles.
+    # extrair_locador (regex.search) só acha o PRIMEIRO -> FULANO.
+    texto = (
+        "LOCADOR: FULANO DE TAL, brasileiro, Casado, Empresário, portador do CPF nº "
+        "111.111.111-11,\nRG nº 11111111, residente e domiciliado na Rua Exemplo nº 100, "
+        "Cidade/UF, doravante\ndenominado simplesmente LOCADOR.\n\n"
+        "LOCADOR: BELTRANA DA SILVA, brasileira, Empresária, portador do CPF nº "
+        "222.222.222-22,\nRG nº 22222222, residente e domiciliada na Rua Exemplo nº 100, "
+        "Cidade/UF, doravante\ndenominado simplesmente LOCADOR.\n\n"
+        "LOCATÁRIO: EMPRESA EXEMPLO LTDA, CNPJ nº 12.345.678/0001-99.\n\n"
+    )
+    principal = R.extrair_locador(texto)
+    assert principal.valor.nome == "FULANO DE TAL"
+    assert principal.valor.documento == "11111111111"
+
+    adicionais = R.extrair_locadores_adicionais(texto, locador_principal=principal.valor)
+    assert adicionais.resolvido
+    assert len(adicionais.valor) == 1
+    assert adicionais.valor[0].documento == "22222222222"
+    assert "BELTRANA DA SILVA" in adicionais.valor[0].nome
+
+
+def test_locadores_adicionais_contrato_normal_um_so_locador_nao_encontrado():
+    # Um só bloco "LOCADOR:" -> é o próprio principal, descartado por
+    # equivalência de valor; lista fica vazia.
+    texto = (
+        "LOCADOR: FULANO DE TAL, brasileiro, CPF nº 111.111.111-11.\n\n"
+        "LOCATÁRIO: EMPRESA EXEMPLO LTDA, CNPJ nº 12.345.678/0001-99.\n\n"
+    )
+    principal = R.extrair_locador(texto)
+    res = R.extrair_locadores_adicionais(texto, locador_principal=principal.valor)
+    # Lista vazia é a resposta CONFIANTE e esperada na esmagadora maioria dos
+    # contratos (um só locador) — não é uma lacuna de extração, então não deve
+    # marcar revisão (ver decisão do PM na Fase 3 do plano).
+    assert res.valor == []
+    assert res.confianca == R.CONF_ALTA
+
+
+def test_locadores_adicionais_bloco_duplicado_dedupe_interno():
+    # Três blocos "LOCADOR:": o principal + a MESMA pessoa adicional repetida
+    # duas vezes (mesmo CPF, ex. artefato de OCR) -> só UM item na lista.
+    texto = (
+        "LOCADOR: FULANO DE TAL, brasileiro, CPF nº 111.111.111-11.\n\n"
+        "LOCADOR: BELTRANA DA SILVA, brasileira, CPF nº 222.222.222-22.\n\n"
+        "LOCADOR: BELTRANA DA SILVA, brasileira, CPF nº 222.222.222-22.\n\n"
+        "LOCATÁRIO: EMPRESA EXEMPLO LTDA, CNPJ nº 12.345.678/0001-99.\n\n"
+    )
+    principal = R.extrair_locador(texto)
+    res = R.extrair_locadores_adicionais(texto, locador_principal=principal.valor)
+    assert res.resolvido
+    assert len(res.valor) == 1
+    assert res.valor[0].documento == "22222222222"
+
+
+@pytest.mark.parametrize("texto", ["documento sem partes rotuladas", ""])
+def test_locadores_adicionais_sem_locador_no_texto_confirma_lista_vazia(texto):
+    res = R.extrair_locadores_adicionais(texto, locador_principal=Parte())
+    # Idem: nenhum bloco "LOCADOR:" no texto -> lista vazia CONFIANTE, não
+    # "não encontrado" (não há campo ambíguo aqui, só ausência do padrão raro
+    # de múltiplos locadores).
+    assert res.valor == []
+    assert res.confianca == R.CONF_ALTA
 
 
 # --------------------------------------------------------------------------- #
@@ -282,6 +359,16 @@ def test_inicio_e_fim_por_ancora_isolada():
     assert R.extrair_data_fim("término em 14/07/2028").valor == date(2028, 7, 14)
 
 
+def test_inicio_por_verbo_iniciando_se():
+    # REGRESSÃO: raiz "in[íi]cio\w*" exige o substantivo — "iniciando-se" (verbo)
+    # nunca casava, mesmo com a data explícita logo em seguida no texto.
+    texto = (
+        "iniciando-se em 30 de julho de 2026 e encerrando-se em 29 de julho "
+        "de 2031, independentemente de notificação."
+    )
+    assert R.extrair_data_inicio(texto).valor == date(2026, 7, 30)
+
+
 def test_prazo_meses_numerico_ancorado():
     res = R.extrair_prazo_meses("pelo prazo de 24 (vinte e quatro) meses")
     assert res.valor == 24
@@ -310,6 +397,23 @@ def test_prazo_generico_sem_ancora_e_baixa_confianca():
     assert res.valor == 12
     assert res.confianca == CONF_BAIXA
     assert not res.resolvido  # cai abaixo do limiar -> revisão manual
+
+
+def test_prazo_anos_numerico_ancorado_converte_para_meses():
+    # REGRESSÃO: cláusula real usa "anos", não "meses" — regex antiga não casava
+    # e o prazo, mesmo explícito no texto, era perdido (nao_encontrado).
+    res = R.extrair_prazo_meses(
+        "A locação terá prazo determinado de 05 (cinco) anos, "
+        "iniciando-se em 30 de julho de 2026."
+    )
+    assert res.valor == 60
+    assert res.confianca == CONF_ALTA
+
+
+def test_prazo_anos_por_extenso_ancorado_converte_para_meses():
+    res = R.extrair_prazo_meses("pelo prazo de cinco anos, prorrogável.")
+    assert res.valor == 60
+    assert res.confianca == CONF_MEDIA
 
 
 @pytest.mark.parametrize(
@@ -353,6 +457,59 @@ def test_indice_reajuste_vedado_moeda_estrangeira():
     assert res.valor == "moeda estrangeira"
 
 
+# --------------------------------------------------------------------------- #
+# Plano B, Fase 1: fonte do índice de reajuste (``indice_fonte``)
+# --------------------------------------------------------------------------- #
+def test_indice_fonte_encontrada_ancorada_no_indice():
+    res = R.extrair_indice_fonte("reajustado pelo IGP-M/FGV anualmente", "IGP-M")
+    assert res.valor == "FGV"
+    assert res.confianca == CONF_ALTA
+
+
+def test_indice_fonte_ausente_e_caso_normal_confiante():
+    # A maioria dos contratos cita só o índice, sem qualificar a fonte —
+    # isso NÃO é uma lacuna: não pode usar ``nao_encontrado``.
+    res = R.extrair_indice_fonte("reajustado pelo IGP-M anualmente", "IGP-M")
+    assert res.valor is None
+    assert res.confianca == CONF_ALTA
+    assert res.resolvido is False  # None não "resolve", mas também não é revisão
+    assert res.origem != R.OrigemExtracao.NAO_ENCONTRADO
+
+
+def test_indice_fonte_com_indice_none():
+    res = R.extrair_indice_fonte("reajustado pelo IGP-M/FGV anualmente", None)
+    assert res.valor is None
+    assert res.confianca == CONF_ALTA
+    assert res.origem != R.OrigemExtracao.NAO_ENCONTRADO
+
+
+# --------------------------------------------------------------------------- #
+# Plano B, Fase 1: carência (em meses)
+# --------------------------------------------------------------------------- #
+def test_carencia_meses_numerico_ancorado():
+    res = R.extrair_carencia_meses("haverá carência de 2 (dois) meses")
+    assert res.valor == 2
+    assert res.confianca == CONF_ALTA
+
+
+def test_carencia_sem_mencao_e_caso_normal_confiante():
+    # Esmagadora maioria dos contratos não tem cláusula de carência —
+    # ausência total da palavra é confiante, não dispara revisão (mesmo
+    # critério usado por ``ContractExtractionService._registrar``: origem
+    # != NAO_ENCONTRADO e confiança acima do limiar).
+    res = R.extrair_carencia_meses("prazo de 24 meses, reajuste anual pelo IGP-M.")
+    assert res.valor is None
+    assert res.confianca == CONF_ALTA
+    assert res.origem != R.OrigemExtracao.NAO_ENCONTRADO
+
+
+def test_carencia_mencionada_sem_valor_em_meses_dispara_revisao():
+    # Mencionada mas em dias — lacuna real: não converte, vai para revisão.
+    res = R.extrair_carencia_meses("haverá carência de 60 dias antes do primeiro pagamento")
+    assert res.resolvido is False
+    assert res.origem == R.OrigemExtracao.NAO_ENCONTRADO
+
+
 @pytest.mark.parametrize(
     ("texto", "esperado"),
     [
@@ -381,3 +538,94 @@ def test_reajuste_automatico_nao_mencionado_marca_revisao():
 def test_proximo_reajuste():
     res = R.extrair_proximo_reajuste("próximo reajuste em 03/2025")
     assert res.valor == "2025-03-01"
+
+
+# --------------------------------------------------------------------------- #
+# Despesas contratuais (tipo -> responsável, por proximidade textual)
+# --------------------------------------------------------------------------- #
+def test_despesa_iptu_responsavel_locatario():
+    res = R.extrair_despesas("O locatário pagará o IPTU incidente sobre o imóvel.")
+    assert res.valor == {TipoDespesa.IPTU: ResponsavelDespesa.LOCATARIO}
+    assert res.confianca == CONF_ALTA
+
+
+def test_despesa_condominio_ordinario_e_extraordinario_distintos():
+    # Caso crítico: o mesmo texto distingue ordinária/extraordinária e atribui
+    # responsáveis DIFERENTES a cada uma -> as duas devem ser detectadas, cada
+    # uma com o responsável certo (não pode colapsar num só tipo).
+    texto = (
+        "As despesas ordinárias de condomínio ficam a cargo do locatário, "
+        "enquanto as despesas extraordinárias de condomínio serão de "
+        "responsabilidade do locador."
+    )
+    res = R.extrair_despesas(texto)
+    assert res.valor == {
+        TipoDespesa.CONDOMINIO_ORDINARIO: ResponsavelDespesa.LOCATARIO,
+        TipoDespesa.CONDOMINIO_EXTRAORDINARIO: ResponsavelDespesa.LOCADOR,
+    }
+
+
+def test_despesa_seguro_incendio_responsavel_locador():
+    res = R.extrair_despesas("O seguro contra incêndio será custeado pelo locador.")
+    assert res.valor == {TipoDespesa.SEGURO_INCENDIO: ResponsavelDespesa.LOCADOR}
+
+
+def test_despesa_taxa_administracao_responsavel_locador():
+    res = R.extrair_despesas("Fica ajustada taxa de administração a ser paga pelo locador.")
+    assert res.valor == {TipoDespesa.TAXA_ADMINISTRACAO: ResponsavelDespesa.LOCADOR}
+
+
+def test_despesa_detectada_sem_responsavel_por_distancia():
+    # IPTU é mencionado, mas nenhum rótulo LOCADOR/LOCATÁRIO aparece na janela
+    # de proximidade (100 chars) ao redor do termo -> responsável fica None.
+    texto = (
+        "CLÁUSULA SÉTIMA: Fica estabelecido que o IPTU incidente sobre o imóvel, "
+        "referente ao exercício fiscal corrente, será objeto de comprovante de "
+        "pagamento anexado a este instrumento particular para fins de conferência "
+        "posterior conforme cronograma financeiro em aditivo próprio a ser "
+        "firmado supervenientemente pelas partes."
+    )
+    res = R.extrair_despesas(texto)
+    assert res.valor == {TipoDespesa.IPTU: None}
+
+
+def test_despesa_ausente():
+    assert not R.extrair_despesas("contrato sem qualquer menção a despesas").resolvido
+
+
+# --------------------------------------------------------------------------- #
+# Prorrogação/renovação automática + prazo
+# --------------------------------------------------------------------------- #
+def test_prorrogacao_automatica_com_prazo_repetido():
+    texto = (
+        "Findo o prazo contratual, este instrumento será prorrogado "
+        "automaticamente por igual período de 12 (doze) meses."
+    )
+    auto = R.extrair_prorrogacao_automatica(texto)
+    assert auto.valor is True
+    assert auto.confianca == CONF_ALTA
+
+    prazo = R.extrair_prorrogacao_prazo_meses(texto)
+    assert prazo.valor == 12
+    assert prazo.confianca == CONF_ALTA
+
+
+def test_prorrogacao_automatica_prazo_indeterminado_sem_numero():
+    texto = "O contrato prorrogar-se-á automaticamente por prazo indeterminado."
+    assert R.extrair_prorrogacao_automatica(texto).valor is True
+    assert not R.extrair_prorrogacao_prazo_meses(texto).resolvido
+
+
+def test_prorrogacao_automatica_sem_repetir_numero_nao_infere():
+    # REGRESSÃO de design: "igual período" sem repetir o número NÃO pode ser
+    # inferido a partir do prazo original do contrato (a função nem o recebe).
+    texto = "Findo o prazo, o contrato será prorrogado automaticamente por igual período."
+    assert R.extrair_prorrogacao_automatica(texto).valor is True
+    assert not R.extrair_prorrogacao_prazo_meses(texto).resolvido
+
+
+def test_prorrogacao_automatica_nao_mencionada_marca_revisao():
+    res = R.extrair_prorrogacao_automatica("o aluguel será corrigido pelo IPCA")
+    assert res.valor is False
+    assert res.confianca == CONF_BAIXA
+    assert not R.extrair_prorrogacao_prazo_meses("o aluguel será corrigido pelo IPCA").resolvido

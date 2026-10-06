@@ -14,17 +14,26 @@ nenhuma chamada de rede/SDK ocorre. O teste de LLM "real" fica marcado como
 """
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 
 import pytest
 
 from contract_parser.application.contract_extraction_service import ExtratorContrato
-from contract_parser.domain.contrato import OrigemExtracao, TipoLocacao
+from contract_parser.domain.contrato import (
+    OrigemExtracao,
+    Parte,
+    Prorrogacao,
+    ResponsavelDespesa,
+    TipoDespesa,
+    TipoLocacao,
+)
 from contract_parser.domain.interpretador import (
     InterpretadorClausula,
     PedidoInterpretacao,
     ResultadoInterpretacao,
 )
+from contract_parser.domain.regras_extracao import CONF_BAIXA
 from tests.support import contract_fixtures as cf
 from tests.support.fakes import FakeInterpretadorLLM
 
@@ -167,3 +176,217 @@ def test_interpretador_llm_real_indisponivel_por_lgpd():
     # Nenhum provedor de LLM foi definido (decisão adiada por LGPD, ADR-001):
     # não há chamada real a validar nesta fase.
     pytest.skip("Provedor de LLM não configurado (LGPD/ADR-001) — sem chamada real.")
+
+
+# --------------------------------------------------------------------------- #
+# Despesas e Prorrogação (Fase 3 — conecta os extratores da Fase 2 ao
+# orquestrador; nenhuma mudança em persistência/relatório/GUI aqui).
+# --------------------------------------------------------------------------- #
+TEXTO_DESPESA_E_PRORROGACAO = (
+    "O locatário pagará o IPTU incidente sobre o imóvel.\n"
+    "Findo o prazo, o contrato será prorrogado automaticamente por igual "
+    "período de 12 meses."
+)
+
+
+def test_despesas_e_prorrogacao_resolvidas_pela_regra():
+    contrato = ExtratorContrato().extrair(TEXTO_DESPESA_E_PRORROGACAO)
+
+    assert contrato.despesas == {TipoDespesa.IPTU: ResponsavelDespesa.LOCATARIO}
+    assert contrato.prorrogacao == Prorrogacao(automatica=True, prazo_meses=12)
+
+
+def test_memoria_registra_proveniencia_de_despesas_e_prorrogacao():
+    contrato = ExtratorContrato().extrair(TEXTO_DESPESA_E_PRORROGACAO)
+    memoria = contrato.memoria_extracao
+
+    assert memoria["despesas"].origem == OrigemExtracao.REGRA
+    assert memoria["despesas"].confianca == pytest.approx(0.9)
+    assert not memoria["despesas"].necessita_revisao
+
+    assert memoria["prorrogacao_automatica"].origem == OrigemExtracao.REGRA
+    assert memoria["prorrogacao_automatica"].confianca == pytest.approx(0.9)
+    assert not memoria["prorrogacao_automatica"].necessita_revisao
+
+    assert memoria["prorrogacao_prazo_meses"].origem == OrigemExtracao.REGRA
+    assert memoria["prorrogacao_prazo_meses"].confianca == pytest.approx(0.9)
+    assert not memoria["prorrogacao_prazo_meses"].necessita_revisao
+
+
+def test_sem_despesa_ou_prorrogacao_usa_defaults_sem_quebrar():
+    contrato = ExtratorContrato().extrair(TEXTO_RESIDENCIAL)
+
+    assert contrato.despesas == {}
+    assert contrato.prorrogacao == Prorrogacao()
+
+
+# --------------------------------------------------------------------------- #
+# Locadores adicionais (Plano A, Fase 3 — conecta extrair_locadores_adicionais
+# ao orquestrador; co-proprietários PF em blocos "LOCADOR:" repetidos).
+# --------------------------------------------------------------------------- #
+TEXTO_DOIS_LOCADORES = (
+    "LOCADOR: FULANO DE TAL, brasileiro, portador do CPF nº 111.111.111-11.\n\n"
+    "LOCADOR: BELTRANA DA SILVA, brasileira, portadora do CPF nº 222.222.222-22.\n\n"
+    "O aluguel mensal é de R$ 2.000,00."
+)
+
+
+def test_locadores_adicionais_conectados_ao_orquestrador():
+    contrato = ExtratorContrato().extrair(TEXTO_DOIS_LOCADORES)
+
+    assert contrato.locador.nome == "FULANO DE TAL"
+    assert contrato.locador.documento == "11111111111"
+    assert contrato.locadores_adicionais == [
+        Parte(tipo=contrato.locadores_adicionais[0].tipo, nome="BELTRANA DA SILVA", documento="22222222222")
+    ]
+
+
+def test_memoria_registra_proveniencia_de_locadores_adicionais():
+    contrato = ExtratorContrato().extrair(TEXTO_DOIS_LOCADORES)
+    reg = contrato.memoria_extracao["locadores_adicionais"]
+
+    assert reg.origem == OrigemExtracao.REGRA
+    assert reg.confianca == pytest.approx(0.9)
+    assert not reg.necessita_revisao
+
+
+def test_sem_locador_adicional_usa_default_lista_vazia_sem_quebrar():
+    contrato = ExtratorContrato().extrair(TEXTO_RESIDENCIAL)
+
+    assert contrato.locadores_adicionais == []
+
+
+# --------------------------------------------------------------------------- #
+# Índice-fonte do reajuste e carência (Plano B, Fase 3 — conecta
+# extrair_indice_fonte e extrair_carencia_meses ao orquestrador; extratores já
+# prontos na Fase 2, aqui é só wiring).
+# --------------------------------------------------------------------------- #
+TEXTO_INDICE_FONTE_E_CARENCIA = (
+    "LOCADOR: Fulano de Tal, CPF 123.456.789-09.\n\n"
+    "O aluguel mensal é de R$ 2.000,00, reajustado pelo IGP-M/FGV anualmente.\n"
+    "Fica concedida carência de 2 (dois) meses para pagamento do aluguel, "
+    "contados da assinatura deste instrumento."
+)
+
+TEXTO_SEM_FONTE_E_SEM_CARENCIA = (
+    "LOCADOR: Fulano de Tal, CPF 123.456.789-09.\n\n"
+    "O aluguel mensal é de R$ 2.000,00, reajustado pelo IGP-M anualmente."
+)
+
+
+def test_indice_fonte_e_carencia_conectados_ao_orquestrador():
+    contrato = ExtratorContrato().extrair(TEXTO_INDICE_FONTE_E_CARENCIA)
+
+    assert contrato.reajuste.indice == "IGP-M"
+    assert contrato.reajuste.indice_fonte == "FGV"
+    assert contrato.carencia_meses == 2
+
+
+def test_memoria_registra_proveniencia_de_indice_fonte_e_carencia():
+    contrato = ExtratorContrato().extrair(TEXTO_INDICE_FONTE_E_CARENCIA)
+    memoria = contrato.memoria_extracao
+
+    assert memoria["reajuste_indice_fonte"].origem == OrigemExtracao.REGRA
+    assert not memoria["reajuste_indice_fonte"].necessita_revisao
+
+    assert memoria["carencia_meses"].origem == OrigemExtracao.REGRA
+    assert not memoria["carencia_meses"].necessita_revisao
+
+
+def test_sem_carencia_ou_fonte_de_indice_nao_gera_revisao():
+    contrato = ExtratorContrato().extrair(TEXTO_SEM_FONTE_E_SEM_CARENCIA)
+
+    assert contrato.carencia_meses is None
+    assert contrato.reajuste.indice_fonte is None
+
+    memoria = contrato.memoria_extracao
+    # Ausência é o caso NORMAL/ESPERADO (decidido na Fase 2) — não deve
+    # gerar revisão no Painel.
+    assert memoria["carencia_meses"].necessita_revisao is False
+    assert memoria["reajuste_indice_fonte"].necessita_revisao is False
+
+
+# --------------------------------------------------------------------------- #
+# Próximo reajuste CALCULADO (Plano C, Fase 2): sem data explícita no texto, mas
+# com início de vigência conhecido, deriva a data via ``calcular_proximo_reajuste_anual``.
+# O relógio só entra por injeção (``hoje``); sem ele o fallback fica desligado.
+# --------------------------------------------------------------------------- #
+HOJE_FIXO = date(2026, 10, 6)
+
+
+def _hoje() -> date:
+    return HOJE_FIXO
+
+
+TEXTO_INICIO_E_REAJUSTE_ANUAL = (
+    "LOCADOR: Fulano de Tal, CPF 123.456.789-09.\n\n"
+    "O prazo de vigência tem início em 01/03/2024.\n"
+    "O aluguel mensal é de R$ 2.000,00, reajustado pelo IGP-M anualmente."
+)
+TEXTO_INICIO_E_REAJUSTE_SEMESTRAL = (
+    "LOCADOR: Fulano de Tal, CPF 123.456.789-09.\n\n"
+    "O prazo de vigência tem início em 01/03/2024.\n"
+    "O aluguel mensal é de R$ 2.000,00, reajustado pelo IGP-M semestralmente."
+)
+TEXTO_INICIO_E_REAJUSTE_SEM_PERIODICIDADE = (
+    "LOCADOR: Fulano de Tal, CPF 123.456.789-09.\n\n"
+    "O prazo de vigência tem início em 01/03/2024.\n"
+    "O aluguel mensal é de R$ 2.000,00, atualizado pelo IGP-M."
+)
+TEXTO_INICIO_E_PROXIMO_EXPLICITO = (
+    TEXTO_INICIO_E_REAJUSTE_ANUAL + "\nO próximo reajuste em 03/2025."
+)
+TEXTO_REAJUSTE_SEM_INICIO = (
+    "LOCADOR: Fulano de Tal, CPF 123.456.789-09.\n\n"
+    "O aluguel mensal é de R$ 2.000,00, reajustado pelo IGP-M anualmente."
+)
+
+
+def test_proximo_reajuste_calculado_quando_texto_nao_traz_data_explicita():
+    contrato = ExtratorContrato(hoje=_hoje).extrair(TEXTO_INICIO_E_REAJUSTE_ANUAL)
+
+    assert contrato.reajuste.proximo_reajuste == "2027-03-01"
+    registro = contrato.memoria_extracao["reajuste_proximo"]
+    assert registro.origem == OrigemExtracao.REGRA_CALCULADA
+    assert registro.necessita_revisao is True
+    assert registro.confianca == CONF_BAIXA
+    assert "01/03/2024" in registro.detalhe
+    assert "12 meses" in registro.detalhe
+
+
+def test_data_explicita_do_texto_prevalece_sobre_o_calculo():
+    contrato = ExtratorContrato(hoje=_hoje).extrair(TEXTO_INICIO_E_PROXIMO_EXPLICITO)
+
+    assert contrato.reajuste.proximo_reajuste == "2025-03-01"
+    assert contrato.memoria_extracao["reajuste_proximo"].origem == OrigemExtracao.REGRA
+
+
+def test_sem_relogio_injetado_o_calculo_fica_desligado():
+    contrato = ExtratorContrato().extrair(TEXTO_INICIO_E_REAJUSTE_ANUAL)
+
+    assert contrato.reajuste.proximo_reajuste is None
+    assert contrato.memoria_extracao["reajuste_proximo"].origem == OrigemExtracao.NAO_ENCONTRADO
+
+
+def test_sem_data_de_inicio_nao_calcula_proximo_reajuste():
+    contrato = ExtratorContrato(hoje=_hoje).extrair(TEXTO_REAJUSTE_SEM_INICIO)
+
+    assert contrato.reajuste.proximo_reajuste is None
+    assert contrato.memoria_extracao["reajuste_proximo"].origem == OrigemExtracao.NAO_ENCONTRADO
+
+
+def test_calculo_usa_periodicidade_semestral_extraida():
+    contrato = ExtratorContrato(hoje=_hoje).extrair(TEXTO_INICIO_E_REAJUSTE_SEMESTRAL)
+
+    assert contrato.reajuste.periodicidade_meses == 6
+    # início + 5*6 meses = 01/09/2026 < hoje (06/10/2026) → próximo é início + 6*6 meses.
+    assert contrato.reajuste.proximo_reajuste == "2027-03-01"
+    assert "6 meses" in contrato.memoria_extracao["reajuste_proximo"].detalhe
+
+
+def test_calculo_assume_periodicidade_anual_quando_texto_nao_menciona():
+    contrato = ExtratorContrato(hoje=_hoje).extrair(TEXTO_INICIO_E_REAJUSTE_SEM_PERIODICIDADE)
+
+    assert contrato.reajuste.periodicidade_meses is None
+    assert contrato.reajuste.proximo_reajuste == "2027-03-01"
+    assert "12 meses" in contrato.memoria_extracao["reajuste_proximo"].detalhe

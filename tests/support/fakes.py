@@ -12,7 +12,8 @@ mais de um fake de baixo nível equivalente ao antigo ``pymongo.Collection``.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from contract_parser.domain.cnpj import normalizar_cnpj
@@ -222,6 +223,26 @@ class FakeContratoRepository:
     def buscar_por_hash(self, arquivo_hash: str) -> RegistroContrato | None:
         id_ = self._id_por_hash.get(arquivo_hash)
         return self._store.get(id_) if id_ is not None else None
+
+    def atualizar_proximo_reajuste(
+        self, id: str, novo_valor: date
+    ) -> RegistroContrato | None:
+        registro = self._store.get(id)
+        if registro is None:
+            return None
+        iso = novo_valor.isoformat()
+        contrato = registro.contrato.model_copy(
+            update={
+                "reajuste": registro.contrato.reajuste.model_copy(
+                    update={"proximo_reajuste": iso}
+                )
+            }
+        )
+        atualizado = replace(
+            registro, contrato=contrato, linha=replace(registro.linha, proximo_reajuste=iso)
+        )
+        self._store[id] = atualizado
+        return atualizado
 
     def excluir(self, id: str) -> bool:
         registro = self._store.pop(id, None)

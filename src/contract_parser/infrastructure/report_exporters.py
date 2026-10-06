@@ -22,6 +22,7 @@ from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
+from contract_parser.domain.contrato import Parte, ResponsavelDespesa, TipoDespesa
 from contract_parser.domain.relatorio import (
     LinhaContrato,
     Relatorio,
@@ -38,10 +39,34 @@ CABECALHOS_CONTRATOS = [
     "IRRF Retido",
     "Redução IRRF (Lei 15.270/2025)",
     "Índice",
+    "Fonte do Índice",
     "Próximo Reajuste",
     "Reajuste Auto",
     "Vencimento",
+    "Carência",
+    "Despesas",
+    "Prorrogação",
+    "Locador(es) Adicional(is)",
 ]
+
+# Larguras (em pontos) da tabela de contratos do PDF, uma por cabeçalho — a
+# soma cabe na área útil da página A4 paisagem (larguras de coluna fixas são
+# OBRIGATÓRIAS aqui: sem elas o reportlab dimensiona cada coluna pelo texto
+# mais largo, e com 15 colunas a soma passa da largura da página, fazendo o
+# conteúdo que ultrapassa a borda ser descartado do PDF — não é só um recorte
+# visual). Os cabeçalhos mais longos quebram em duas linhas (célula com
+# ``Paragraph``); os dados (mais curtos) cabem numa linha só.
+#
+# Soma == 785pt (área útil da página: A4 paisagem, 841.89pt de largura total,
+# menos leftMargin=28 e rightMargin=28 do ``SimpleDocTemplate`` abaixo).
+# "Fonte do Índice" e "Carência" têm conteúdo curto ("FGV", "2 meses"), por
+# isso ficam estreitas; as demais foram reduzidas proporcionalmente para
+# abrir espaço sem repetir o bug de descarte silencioso de conteúdo.
+_LARGURAS_COLUNAS_CONTRATOS = [
+    78, 53, 78, 50, 44, 58, 31, 40, 48, 40, 46, 48, 50, 58, 63,
+]
+assert len(_LARGURAS_COLUNAS_CONTRATOS) == len(CABECALHOS_CONTRATOS)
+assert sum(_LARGURAS_COLUNAS_CONTRATOS) <= 785, "larguras excedem a área útil da página A4 paisagem"
 
 _VAZIO = ""  # célula em branco para dado ausente (revisão manual)
 
@@ -82,6 +107,65 @@ def _texto(valor: str | None) -> str:
     return valor if valor else _VAZIO
 
 
+_ROTULOS_TIPO_DESPESA: dict[TipoDespesa, str] = {
+    TipoDespesa.IPTU: "IPTU",
+    TipoDespesa.CONDOMINIO_ORDINARIO: "Condomínio (ordinário)",
+    TipoDespesa.CONDOMINIO_EXTRAORDINARIO: "Condomínio (extraordinário)",
+    TipoDespesa.SEGURO_INCENDIO: "Seguro-incêndio",
+    TipoDespesa.TAXA_ADMINISTRACAO: "Taxa de administração",
+    TipoDespesa.OUTRAS: "Outras",
+}
+
+
+def formatar_despesas(despesas: dict[TipoDespesa, ResponsavelDespesa | None]) -> str:
+    """Resume o dict tipo->responsável numa string ``"Rótulo: Responsável"``,
+    separada por ``"; "``, na ORDEM DE DECLARAÇÃO de ``TipoDespesa`` (não na
+    ordem de inserção do dict, que reflete a ordem em que os regexes casaram
+    no texto — não determinística entre execuções). Vazio -> string vazia.
+    """
+    if not despesas:
+        return _VAZIO
+    partes = []
+    for tipo in TipoDespesa:
+        if tipo not in despesas:
+            continue
+        responsavel = despesas[tipo]
+        if responsavel == ResponsavelDespesa.LOCADOR:
+            rotulo_resp = "Locador"
+        elif responsavel == ResponsavelDespesa.LOCATARIO:
+            rotulo_resp = "Locatário"
+        else:
+            rotulo_resp = "não identificado"
+        partes.append(f"{_ROTULOS_TIPO_DESPESA[tipo]}: {rotulo_resp}")
+    return "; ".join(partes)
+
+
+def formatar_prorrogacao(automatica: bool, prazo_meses: int | None) -> str:
+    """``"Sim (12 meses)"`` / ``"Sim"`` (sem prazo) / ``"Não"``."""
+    if not automatica:
+        return "Não"
+    if prazo_meses is not None:
+        return f"Sim ({prazo_meses} meses)"
+    return "Sim"
+
+
+def formatar_carencia_meses(carencia_meses: int | None) -> str:
+    """``"2 meses"`` quando há carência, vazio quando não (None)."""
+    if carencia_meses is None:
+        return _VAZIO
+    return f"{carencia_meses} meses"
+
+
+def formatar_locadores_adicionais(locadores: tuple[Parte, ...]) -> str:
+    """Nomes dos locadores ADEM do principal, separados por ``"; "`` (vazio se
+    não houver nenhum). Uma ``Parte`` sem nome usa o texto de fallback
+    ``"(sem nome identificado)"``.
+    """
+    if not locadores:
+        return _VAZIO
+    return "; ".join(p.nome or "(sem nome identificado)" for p in locadores)
+
+
 def linha_para_celulas(linha: LinhaContrato) -> list[str]:
     """Converte uma :class:`LinhaContrato` na sequência de células apresentáveis."""
     return [
@@ -92,9 +176,14 @@ def linha_para_celulas(linha: LinhaContrato) -> list[str]:
         formatar_moeda_brl(linha.irrf_retido),
         formatar_moeda_brl(linha.reducao_irrf),
         _texto(linha.indice),
+        _texto(linha.indice_fonte),
         _texto(linha.proximo_reajuste),
         _sim_nao(linha.reajuste_automatico),
         formatar_data_br(linha.vencimento),
+        formatar_carencia_meses(linha.carencia_meses),
+        formatar_despesas(linha.despesas),
+        formatar_prorrogacao(linha.prorrogacao_automatica, linha.prorrogacao_prazo_meses),
+        formatar_locadores_adicionais(linha.locadores_adicionais),
     ]
 
 
@@ -179,39 +268,57 @@ class PdfRelatorioExporter:
     """Exporta o relatório para ``.pdf`` (reportlab, import lazy)."""
 
     def _tabela_contratos(self, contratos: RelatorioContratos):
+        from xml.sax.saxutils import escape
+
         from reportlab.lib import colors
-        from reportlab.platypus import Table, TableStyle
+        from reportlab.lib.styles import ParagraphStyle
+        from reportlab.platypus import Paragraph, Table, TableStyle
 
-        dados = [CABECALHOS_CONTRATOS]
-        for linha in contratos.linhas:
-            dados.append(linha_para_celulas(linha))
-        dados.append(
-            [
-                "TOTAL",
-                "",
-                "",
-                "",
-                formatar_moeda_brl(contratos.total_irrf_retido),
-                formatar_moeda_brl(contratos.total_reducao_irrf),
-                "",
-                "",
-                "",
-                "",
-            ]
+        # Células viram Paragraph (em vez de string crua) para poder QUEBRAR
+        # LINHA — necessário porque as larguras fixas de coluna (acima) são
+        # mais estreitas que alguns cabeçalhos por inteiro numa linha só.
+        estilo_cabecalho = ParagraphStyle(
+            "CabecalhoContrato", fontName="Helvetica-Bold", fontSize=7, leading=8,
+            textColor=colors.white,
         )
+        estilo_celula = ParagraphStyle("CelulaContrato", fontName="Helvetica", fontSize=7, leading=8)
+        estilo_total = ParagraphStyle("TotalContrato", fontName="Helvetica-Bold", fontSize=7, leading=8)
 
-        tabela = Table(dados, repeatRows=1)
+        def _celula(texto: str, estilo: ParagraphStyle) -> Paragraph:
+            return Paragraph(escape(texto), estilo)
+
+        dados = [[_celula(c, estilo_cabecalho) for c in CABECALHOS_CONTRATOS]]
+        for linha in contratos.linhas:
+            dados.append([_celula(c, estilo_celula) for c in linha_para_celulas(linha)])
+        linha_total = [
+            "TOTAL",
+            "",
+            "",
+            "",
+            formatar_moeda_brl(contratos.total_irrf_retido),
+            formatar_moeda_brl(contratos.total_reducao_irrf),
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+        ]
+        dados.append([_celula(c, estilo_total) for c in linha_total])
+
+        tabela = Table(dados, colWidths=_LARGURAS_COLUNAS_CONTRATOS, repeatRows=1)
         tabela.setStyle(
             TableStyle(
                 [
                     ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F3864")),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("FONTSIZE", (0, 0), (-1, -1), 7),
                     ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
                     ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#F2F2F2")]),
-                    ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
                     ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 3),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 3),
                 ]
             )
         )
@@ -271,6 +378,12 @@ class PdfRelatorioExporter:
             str(destino),
             pagesize=landscape(A4),
             title="Relatório de Contratos de Locação",
+            # Margens laterais reduzidas: a tabela de contratos tem 13
+            # colunas de largura fixa (``_LARGURAS_COLUNAS_CONTRATOS``) e
+            # precisa da área útil máxima da página para caber sem cortar
+            # conteúdo (ver comentário da constante).
+            leftMargin=28,
+            rightMargin=28,
         )
         flowables = [
             Paragraph("Relatório de Contratos de Locação", estilos["Title"]),

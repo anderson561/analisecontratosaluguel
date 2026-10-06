@@ -442,13 +442,18 @@ class MainWindow(ctk.CTk):
     _COLS_PAINEL: tuple[tuple[str, str, int], ...] = (
         ("locatario", "Locatário", 190),
         ("locador", "Locador", 190),
+        ("locadores_adicionais", "Locador(es) Adicional(is)", 190),
         ("valor", "Valor", 90),
         ("irrf", "IRRF", 90),
         ("reducao_irrf", "Redução IRRF", 120),
         ("indice", "Índice", 70),
+        ("indice_fonte", "Fonte do Índice", 100),
         ("proximo_reajuste", "Próx. Reajuste", 135),
         ("automatico", "Auto?", 60),
         ("vencimento", "Vencimento", 120),
+        ("carencia", "Carência", 90),
+        ("despesas", "Despesas", 170),
+        ("prorrogacao", "Prorrogação", 130),
         ("revisao", "Revisão", 90),
     )
 
@@ -479,6 +484,13 @@ class MainWindow(ctk.CTk):
         ).pack(side="left", padx=4)
         ctk.CTkButton(
             linha_acoes, text="Limpar", fg_color=_COR_SECUNDARIA, command=self._limpar_filtros
+        ).pack(side="left", padx=4)
+        ctk.CTkButton(
+            linha_acoes,
+            text="Atualizar Próx. Reajuste",
+            fg_color=_COR_PRIMARIA,
+            hover_color=_COR_PRIMARIA_HOVER,
+            command=self._on_atualizar_proximos_reajustes,
         ).pack(side="left", padx=4)
         # Empacotados da direita para a esquerda: "Limpar tudo" primeiro fica
         # na borda direita, "Excluir selecionado" fica logo à esquerda dele.
@@ -611,9 +623,10 @@ class MainWindow(ctk.CTk):
 
             revisao_txt = "⚠ revisar" if linha.revisao else "ok"
             valores = [
-                linha.locatario, linha.locador, linha.valor, linha.irrf, linha.reducao_irrf,
-                linha.indice, linha.proximo_reajuste, linha.automatico, linha.vencimento,
-                revisao_txt,
+                linha.locatario, linha.locador, linha.locadores_adicionais, linha.valor,
+                linha.irrf, linha.reducao_irrf, linha.indice, linha.indice_fonte,
+                linha.proximo_reajuste, linha.automatico, linha.vencimento, linha.carencia,
+                linha.despesas, linha.prorrogacao, revisao_txt,
             ]
             tree.insert("", "end", iid=iid, values=valores, tags=tags)
 
@@ -707,6 +720,28 @@ class MainWindow(ctk.CTk):
             messagebox.showerror("Limpar tudo", str(exc))
             return
         self._recarregar_painel()
+
+    def _on_atualizar_proximos_reajustes(self) -> None:
+        self.configure(cursor="watch")
+        self.update_idletasks()
+        try:
+            total = self._c.relatorio.atualizar_proximos_reajustes()
+        except ControllerError as exc:
+            messagebox.showerror("Atualizar próximo reajuste", str(exc))
+            return
+        finally:
+            self.configure(cursor="")
+        self._recarregar_painel()
+        if total == 0:
+            mensagem = (
+                "Nenhum contrato precisou de atualização: "
+                "as datas de próximo reajuste calculadas já estão em dia."
+            )
+        elif total == 1:
+            mensagem = "1 contrato atualizado."
+        else:
+            mensagem = f"{total} contratos atualizados."
+        messagebox.showinfo("Atualizar próximo reajuste", mensagem)
 
     # ------------------------------------------------------------------ #
     # Aba Conformidade (Relatório 02)

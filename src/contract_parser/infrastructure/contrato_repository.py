@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
@@ -239,6 +240,48 @@ class ContratoRepository:
                 f"Falha ao buscar contrato pelo hash {arquivo_hash}: {exc}"
             ) from exc
         return _from_row(row) if row is not None else None
+
+    def atualizar_proximo_reajuste(
+        self, id: str, novo_valor: date
+    ) -> RegistroContrato | None:
+        """Edição pontual do próximo reajuste (não é o upsert do agregado).
+
+        Reserializa só ``contrato_json`` e ``linha_json``: hash, nome, datas,
+        flags e a ``memoria_extracao`` (origem inclusive) ficam intactos.
+        """
+        try:
+            row = self._conn.execute(
+                "SELECT * FROM contratos WHERE id = ?", (id,)
+            ).fetchone()
+            if row is None:
+                return None
+            registro = _from_row(row)
+            iso = novo_valor.isoformat()
+            contrato = registro.contrato.model_copy(
+                update={
+                    "reajuste": registro.contrato.reajuste.model_copy(
+                        update={"proximo_reajuste": iso}
+                    )
+                }
+            )
+            linha = replace(registro.linha, proximo_reajuste=iso)
+            self._conn.execute(
+                "UPDATE contratos SET contrato_json = ?, linha_json = ? WHERE id = ?",
+                (
+                    contrato.model_dump_json(),
+                    json.dumps(_linha_para_dict(linha), ensure_ascii=False),
+                    id,
+                ),
+            )
+            self._conn.commit()
+            atualizado = self._conn.execute(
+                "SELECT * FROM contratos WHERE id = ?", (id,)
+            ).fetchone()
+        except sqlite3.Error as exc:
+            raise RepositoryError(
+                f"Falha ao atualizar próximo reajuste do contrato {id}: {exc}"
+            ) from exc
+        return _from_row(atualizado)
 
     def excluir(self, id: str) -> bool:
         try:

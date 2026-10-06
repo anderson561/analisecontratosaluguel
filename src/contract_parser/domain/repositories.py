@@ -7,6 +7,7 @@ tocar em ``application``/``domain`` (Dependency Inversion / SOLID).
 """
 from __future__ import annotations
 
+from datetime import date
 from typing import Protocol, runtime_checkable
 
 from contract_parser.domain.contrato import Contrato
@@ -71,6 +72,15 @@ class ContratoRepositoryProtocol(Protocol):
 
     def buscar_por_hash(self, arquivo_hash: str) -> RegistroContrato | None:
         """Busca por ``arquivo_hash``. ``None`` se ausente."""
+        ...
+
+    def atualizar_proximo_reajuste(
+        self, id: str, novo_valor: date
+    ) -> RegistroContrato | None:
+        """Atualiza só o próximo reajuste (contrato e linha) do registro ``id``.
+
+        ``None`` se o ``id`` não existe. Demais campos permanecem intactos.
+        """
         ...
 
     def excluir(self, id: str) -> bool:

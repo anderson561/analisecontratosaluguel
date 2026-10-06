@@ -10,6 +10,7 @@ listagem, exclusão individual e em massa, e conformidade com
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
@@ -32,7 +33,7 @@ from contract_parser.domain.irrf import ResultadoIRRF
 from contract_parser.domain.relatorio import LinhaContrato
 from contract_parser.domain.repositories import ContratoRepositoryProtocol
 from contract_parser.infrastructure.contrato_repository import ContratoRepository
-from contract_parser.infrastructure.database import init_schema
+from contract_parser.infrastructure.database import RepositoryError, init_schema
 
 
 def _conexao() -> sqlite3.Connection:
@@ -396,3 +397,97 @@ def test_excluir_todos_remove_tudo_e_retorna_a_contagem(repo):
 
     assert repo.excluir_todos() == 2
     assert repo.listar() == []
+
+
+# --- atualizar_proximo_reajuste (Plano C, Fase 3) ----------------------------
+
+
+def _salvar_rico(repo):
+    return repo.salvar(
+        arquivo_nome="contrato_alpha.pdf",
+        arquivo_hash="hash-alpha",
+        contrato=_contrato_rico(),
+        linha=_linha_rica(),
+        revisao=True,
+    )
+
+
+def test_atualizar_proximo_reajuste_retorna_e_persiste_o_novo_valor(repo):
+    salvo = _salvar_rico(repo)
+
+    atualizado = repo.atualizar_proximo_reajuste(salvo.id, date(2027, 3, 1))
+
+    assert atualizado.contrato.reajuste.proximo_reajuste == "2027-03-01"
+    assert atualizado.linha.proximo_reajuste == "2027-03-01"
+    for relido in (repo.listar()[0], repo.buscar_por_hash("hash-alpha")):
+        assert relido == atualizado
+
+
+def test_atualizar_proximo_reajuste_preserva_todo_o_resto_do_registro(repo):
+    antes = _salvar_rico(repo)
+
+    depois = repo.atualizar_proximo_reajuste(antes.id, date(2027, 3, 1))
+
+    assert depois.id == antes.id
+    assert depois.arquivo_nome == antes.arquivo_nome
+    assert depois.arquivo_hash == antes.arquivo_hash
+    assert depois.processado_em == antes.processado_em
+    assert depois.revisao is antes.revisao is True
+    assert depois.arquivo_ausente is antes.arquivo_ausente is False
+    assert depois.contrato == antes.contrato.model_copy(
+        update={
+            "reajuste": antes.contrato.reajuste.model_copy(
+                update={"proximo_reajuste": "2027-03-01"}
+            )
+        }
+    )
+    assert depois.linha == replace(antes.linha, proximo_reajuste="2027-03-01")
+    assert depois.linha.indice == "IPCA"
+    assert depois.linha.valor_aluguel == Decimal("5000.00")
+    assert depois.linha.locadores_adicionais == _locadores_adicionais()
+    assert depois.contrato.memoria_extracao == antes.contrato.memoria_extracao
+
+
+def test_atualizar_proximo_reajuste_mantem_origem_regra_calculada(repo):
+    contrato = _contrato_rico().model_copy(
+        update={
+            "memoria_extracao": {
+                "reajuste_proximo": RegistroCampo(
+                    origem=OrigemExtracao.REGRA_CALCULADA,
+                    confianca=0.6,
+                    necessita_revisao=True,
+                )
+            }
+        }
+    )
+    salvo = repo.salvar(
+        arquivo_nome="calc.pdf",
+        arquivo_hash="hash-calc",
+        contrato=contrato,
+        linha=_linha_rica(),
+        revisao=True,
+    )
+
+    atualizado = repo.atualizar_proximo_reajuste(salvo.id, date(2027, 3, 1))
+
+    campo = atualizado.contrato.memoria_extracao["reajuste_proximo"]
+    assert campo.origem is OrigemExtracao.REGRA_CALCULADA
+    assert repo.buscar_por_hash("hash-calc").contrato.memoria_extracao == (
+        contrato.memoria_extracao
+    )
+
+
+def test_atualizar_proximo_reajuste_id_inexistente_retorna_none_sem_alterar(repo):
+    salvo = _salvar_rico(repo)
+
+    assert repo.atualizar_proximo_reajuste("id-inexistente", date(2027, 3, 1)) is None
+    assert repo.listar() == [salvo]
+
+
+def test_atualizar_proximo_reajuste_erro_de_banco_vira_repository_error():
+    conn = _conexao()
+    repo_com_conexao_fechada = ContratoRepository(conn=conn)
+    conn.close()
+
+    with pytest.raises(RepositoryError, match="atualizar próximo reajuste"):
+        repo_com_conexao_fechada.atualizar_proximo_reajuste("qualquer-id", date(2027, 3, 1))

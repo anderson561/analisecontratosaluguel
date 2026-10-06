@@ -1,6 +1,6 @@
 [project]
 name = "contract-parser"
-version = "0.1.0"
+version = "0.2.0"
 description = "Leitor Inteligente de Contratos de Locação (AI Contract Parser)"
 requires-python = ">=3.11"
 dependencies = [

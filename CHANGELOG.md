@@ -4,11 +4,17 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ## [Não lançado]
 
+## [0.2.0] - 2026-10-06
+
 Suíte de testes: 562 → 679 aprovados (4 skips esperados; 1 falha pré-existente e
 não relacionada, `test_ocr_real_tesseract`, que só falha com a suíte inteira
 porque depende do Tesseract no PATH).
 
 ### Adicionado
+- **CI no GitHub Actions** (`.github/workflows/ci.yml`): lint (`ruff`) e testes
+  (`pytest -m "not integration"`) em Windows a cada push/PR na `main`.
+- **Wiki do projeto** com guia de uso, campos extraídos, cálculo do próximo
+  reajuste, arquitetura e limitações conhecidas.
 - **Painel e relatórios — Despesas e Prorrogação:** novas colunas "Despesas"
   (tipo de despesa → responsável: locador/locatário) e "Prorrogação"
   (automática, com prazo quando explícito) no Painel e nas exportações Excel/PDF.

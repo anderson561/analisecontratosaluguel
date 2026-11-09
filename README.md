@@ -81,6 +81,11 @@ clone limpo/CI: `pytesseract` não instalado, provedor de LLM não configurado
 (decisão adiada, ver Backlog) e o harness de contratos reais
 (`CONTRATOS_REAIS_DIR` não definida — ver abaixo).
 
+Falha conhecida: `test_ocr_real_tesseract` passa quando roda sozinho, mas
+falha na suíte inteira (vazamento de estado entre módulos de teste, ainda não
+corrigido). Não indica regressão; o CI roda `pytest -m "not integration"` e
+não o executa.
+
 ### Harness opcional sobre contratos reais (não versionado)
 `tests/application/test_harness_contratos_reais.py` roda o pipeline de
 ingestão+extração sobre uma pasta de PDFs reais fora do repositório (LGPD: os

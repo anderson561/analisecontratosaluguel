@@ -4,11 +4,21 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ## [Não lançado]
 
+### Corrigido
+- **CI quebrado por atualização do ruff:** o `pyproject.toml` pedia `ruff>=0.5`, então
+  o CI passou a instalar o ruff 0.17, que acusa `RUF100` em dois `# noqa: DTZ011`
+  sem uso (a regra DTZ nem está habilitada). Os comentários foram removidos e o
+  ruff foi fixado em `>=0.17.4,<0.18`, para o lint não mudar sozinho.
+- **Documentação:** a nota da versão 0.2.0 atribuía a falha de
+  `test_ocr_real_tesseract` ao Tesseract fora do PATH. Na verdade o teste passa
+  isolado e só falha com a suíte inteira, por vazamento de estado entre testes.
+
 ## [0.2.0] - 2026-10-06
 
 Suíte de testes: 562 → 679 aprovados (4 skips esperados; 1 falha pré-existente e
-não relacionada, `test_ocr_real_tesseract`, que só falha com a suíte inteira
-porque depende do Tesseract no PATH).
+não relacionada, `test_ocr_real_tesseract`: passa isolado, com o Tesseract
+instalado, e só falha rodando a suíte inteira — vazamento de estado entre
+módulos de teste; o CI não roda testes `integration`).
 
 ### Adicionado
 - **CI no GitHub Actions** (`.github/workflows/ci.yml`): lint (`ruff`) e testes

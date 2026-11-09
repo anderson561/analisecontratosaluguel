@@ -25,7 +25,7 @@ contract-parser-gui = "contract_parser.presentation.app:main"
 dev = [
     "pytest>=8.2",
     "pytest-cov>=5.0",
-    "ruff>=0.5",
+    "ruff>=0.17.4,<0.18",
 ]
 build = [
     "pyinstaller>=6.0",

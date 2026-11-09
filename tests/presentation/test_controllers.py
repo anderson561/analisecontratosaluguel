@@ -1300,7 +1300,7 @@ def test_atualizar_proximos_reajustes_sem_referencia_usa_hoje_do_relogio():
     assert isinstance(total, int)
     assert total == 1
     novo = date.fromisoformat(repo.listar()[0].contrato.reajuste.proximo_reajuste)
-    assert novo >= date.today()  # noqa: DTZ011 - mesmo "hoje" local do controller
+    assert novo >= date.today()
 
 
 def test_atualizar_proximos_reajustes_falha_de_banco_vira_controller_error_e_recarrega_painel():

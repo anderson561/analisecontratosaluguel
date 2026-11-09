@@ -538,7 +538,7 @@ class RelatorioController:
         if self._contrato_repo is None:
             raise ControllerError("Sem repositório de contratos configurado.")
         if referencia is None:
-            referencia = date.today()  # noqa: DTZ011 - "hoje" local do usuário (app desktop)
+            referencia = date.today()
         atualizados = 0
         try:
             for _, contrato, registro_id in self._pares:

@@ -380,3 +380,58 @@ def test_observacao_menciona_desconto_simplificado_para_pf(tabela):
     assert "6000.00" in observacao or "6000,00" in observacao  # rendimento bruto
     assert "607.20" in observacao or "607,20" in observacao  # desconto simplificado
     assert "5392.80" in observacao or "5392,80" in observacao  # base tributável
+
+
+# --------------------------------------------------------------------------- #
+# Bug L-01: retenção só em Locador PF × Locatário PJ — o tipo do LOCATÁRIO
+# também decide. Locatário PF não retém (o locador recolhe via carnê-leão).
+# --------------------------------------------------------------------------- #
+def test_locatario_pf_nao_retem_e_explica_carne_leao(tabela):
+    resultado = calcular_irrf(
+        base_mensal=Decimal("6000.00"),
+        tipo_locador=TipoParte.PF,
+        tipo_locatario=TipoParte.PF,
+        tabela=tabela,
+    )
+    # 6.000 PF→PJ reteria R$394,54; PF→PF não retém nada.
+    assert resultado.retido is False
+    assert resultado.imposto == Decimal("0.00")
+    assert resultado.aliquota == Decimal(0)
+    assert resultado.deducao == Decimal("0.00")
+    assert resultado.base_calculo == Decimal("6000.00")
+    assert resultado.rendimento_bruto == Decimal("6000.00")
+    assert resultado.desconto_simplificado_aplicado == Decimal("0.00")
+    assert resultado.imposto_antes_reducao == Decimal("0.00")
+    assert resultado.reducao_aplicada == Decimal("0.00")
+    assert resultado.faixa_descricao == "não aplicável (locatário PF)"
+    assert "locatário PF" in resultado.observacao
+    assert "carnê-leão" in resultado.observacao
+    assert resultado.tabela_vigencia == "2026"
+
+
+def test_locador_pj_prevalece_sobre_locatario_pf(tabela):
+    resultado = calcular_irrf(
+        base_mensal=Decimal("6000.00"),
+        tipo_locador=TipoParte.PJ,
+        tipo_locatario=TipoParte.PF,
+        tabela=tabela,
+    )
+    assert resultado.imposto == Decimal("0.00")
+    assert resultado.faixa_descricao == "não aplicável (locador PJ)"
+
+
+@pytest.mark.parametrize(
+    ("base", "imposto_final_esperado"),
+    [("5000.00", "0.00"), ("6000.00", "394.54"), ("7350.00", "945.54"), ("7800.00", "1069.29")],
+)
+def test_locatario_pj_explicito_mantem_valores_de_referencia(
+    tabela, base, imposto_final_esperado
+):
+    resultado = calcular_irrf(
+        base_mensal=Decimal(base),
+        tipo_locador=TipoParte.PF,
+        tipo_locatario=TipoParte.PJ,
+        tabela=tabela,
+    )
+    assert resultado.imposto == Decimal(imposto_final_esperado)
+    assert resultado.desconto_simplificado_aplicado == Decimal("607.20")

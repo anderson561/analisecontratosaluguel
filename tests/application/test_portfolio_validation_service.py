@@ -122,6 +122,29 @@ def test_portfolio_vazio_sem_pendencias():
     assert len(resumo.contratos_sem_empresa) == 1
 
 
+def test_resultado_do_match_por_contrato_na_ordem_de_entrada():
+    """Expõe o match de CADA contrato (ordem de entrada) — o RelatorioService
+    usa isso para decidir o IRRF de locatário sem tipo sem reler o portfólio."""
+    repo = _repo(Empresa(cnpj=CNPJ_A, razao_social="Alpha Comercio LTDA"))
+    resumo = PortfolioValidationService(repo).validar(
+        [
+            _contrato(nome="Empresa Desconhecida XYZ", documento=CNPJ_B),
+            _contrato(documento=CNPJ_A),
+            _contrato(nome="Alpha Comercio LTDA"),
+        ]
+    )
+    assert [m.status for m in resumo.matches_por_contrato] == [
+        StatusMatch.NAO_ENCONTRADO,
+        StatusMatch.ENCONTRADO,
+        StatusMatch.ENCONTRADO,
+    ]
+    assert [m.metodo for m in resumo.matches_por_contrato] == [
+        MetodoMatch.NENHUM,
+        MetodoMatch.CNPJ,
+        MetodoMatch.FUZZY,
+    ]
+
+
 def test_ordem_das_pendencias_segue_o_portfolio():
     repo = _repo(
         Empresa(cnpj=CNPJ_A, razao_social="Alpha LTDA"),

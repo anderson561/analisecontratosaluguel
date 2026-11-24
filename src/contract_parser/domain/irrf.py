@@ -8,7 +8,9 @@ auditável. Não faz IO, não importa infraestrutura nem rede — a tabela é in
 Regras de negócio (§4 dos requisitos, D5 do ADR-001):
 
 - IRRF sobre aluguel só é retido quando **Locador PF × Locatário PJ**. Locador
-  PJ ⇒ IRRF = R$ 0,00 (não retido nesta modalidade).
+  PJ ⇒ IRRF = R$ 0,00 (não retido nesta modalidade), qualquer que seja o
+  locatário. Locador PF × Locatário PF ⇒ R$ 0,00 (o locatário PF não retém na
+  fonte; o locador recolhe via carnê-leão).
 - Fórmula: ``IRRF = base_mensal × alíquota − parcela_dedução`` (da faixa em que a
   base cai). Faixa isenta ⇒ R$ 0,00; resultado nunca é negativo.
 - Rigor monetário: todos os valores são :class:`~decimal.Decimal`. O imposto é
@@ -173,10 +175,33 @@ class ResultadoIRRF(BaseModel):
     desconto_simplificado_aplicado: Decimal = _ZERO
 
 
+def _nao_retido(
+    base: Decimal, tabela: TabelaIRRF, *, faixa_descricao: str, observacao: str
+) -> ResultadoIRRF:
+    """Resultado sem retenção (R$ 0,00), sem desconto simplificado nem redutor."""
+    return ResultadoIRRF(
+        retido=False,
+        imposto=_ZERO,
+        base_calculo=base,
+        aliquota=_ZERO,
+        deducao=_ZERO,
+        faixa_descricao=faixa_descricao,
+        tabela_vigencia=tabela.vigencia,
+        base_legal=tabela.base_legal,
+        fonte_url=tabela.fonte_url,
+        observacao=observacao,
+        imposto_antes_reducao=_ZERO,
+        reducao_aplicada=_ZERO,
+        rendimento_bruto=base,
+        desconto_simplificado_aplicado=_ZERO,
+    )
+
+
 def calcular_irrf(
     *,
     base_mensal: Decimal,
     tipo_locador: TipoParte,
+    tipo_locatario: TipoParte = TipoParte.PJ,
     tabela: TabelaIRRF,
 ) -> ResultadoIRRF:
     """Calcula o IRRF retido sobre o aluguel e devolve a memória de cálculo.
@@ -186,8 +211,14 @@ def calcular_irrf(
     base_mensal:
         Valor mensal do aluguel (base de cálculo). ``Decimal`` — nunca ``float``.
     tipo_locador:
-        ``TipoParte.PF`` ou ``TipoParte.PJ``. Só PF (locador) → PJ (locatário)
-        gera retenção; Locador PJ ⇒ R$ 0,00.
+        ``TipoParte.PF`` ou ``TipoParte.PJ``. Locador PJ ⇒ R$ 0,00, qualquer
+        que seja o locatário (prevalece sobre ``tipo_locatario``).
+    tipo_locatario:
+        ``TipoParte.PF`` ou ``TipoParte.PJ``. Só Locador PF × Locatário PJ gera
+        retenção; Locatário PF ⇒ R$ 0,00 (não retém na fonte — o locador
+        recolhe via carnê-leão). Default ``PJ`` (o cenário de retenção); o tipo
+        desconhecido é resolvido ANTES, na camada application
+        (``RelatorioService``), nunca aqui.
     tabela:
         :class:`TabelaIRRF` vigente (injetada pela infraestrutura).
 
@@ -206,26 +237,27 @@ def calcular_irrf(
     if base < _ZERO:
         raise ValueError("Base de cálculo do IRRF não pode ser negativa.")
 
-    # Regra de negócio: retenção só em Locador PF × Locatário PJ.
+    # Regra de negócio: retenção só em Locador PF × Locatário PJ. Locador PJ
+    # vence (é checado primeiro), qualquer que seja o locatário.
     if tipo_locador is TipoParte.PJ:
-        return ResultadoIRRF(
-            retido=False,
-            imposto=_ZERO,
-            base_calculo=base,
-            aliquota=_ZERO,
-            deducao=_ZERO,
+        return _nao_retido(
+            base,
+            tabela,
             faixa_descricao="não aplicável (locador PJ)",
-            tabela_vigencia=tabela.vigencia,
-            base_legal=tabela.base_legal,
-            fonte_url=tabela.fonte_url,
             observacao=(
                 "IRRF não retido: aluguel pago a locador PJ não sofre retenção "
                 "nesta modalidade (RF04)."
             ),
-            imposto_antes_reducao=_ZERO,
-            reducao_aplicada=_ZERO,
-            rendimento_bruto=base,
-            desconto_simplificado_aplicado=_ZERO,
+        )
+    if tipo_locatario is TipoParte.PF:
+        return _nao_retido(
+            base,
+            tabela,
+            faixa_descricao="não aplicável (locatário PF)",
+            observacao=(
+                "IRRF não retido: locatário PF não retém imposto na fonte; o "
+                "locador PF recolhe o imposto via carnê-leão."
+            ),
         )
 
     # Desconto simplificado (ADR-004): abatido da base ANTES da tabela.

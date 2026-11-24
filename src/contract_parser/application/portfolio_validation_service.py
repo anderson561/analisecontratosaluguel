@@ -66,6 +66,8 @@ class PortfolioValidacaoResumo:
     empresas_status: list[EmpresaStatus] = field(default_factory=list)
     pendencias: list[str] = field(default_factory=list)
     contratos_sem_empresa: list[ContratoSemEmpresa] = field(default_factory=list)
+    # Um ResultadoMatch por contrato, na MESMA ordem de entrada de ``validar``.
+    matches_por_contrato: list[ResultadoMatch] = field(default_factory=list)
 
     @property
     def total_empresas(self) -> int:
@@ -122,6 +124,7 @@ class PortfolioValidationService:
                 threshold=self._threshold,
                 similaridade=self._similaridade,
             )
+            resumo.matches_por_contrato.append(resultado)
             if resultado.empresa is not None:
                 matches_por_cnpj[resultado.empresa.cnpj].append(resultado)
             else:

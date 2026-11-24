@@ -160,6 +160,120 @@ def test_contrato_sem_tipo_de_locador_vai_para_revisao():
 
 
 # --------------------------------------------------------------------------- #
+# Bug L-01 — o tipo do LOCATÁRIO também decide a retenção
+# --------------------------------------------------------------------------- #
+CPF_FICTICIO = "11111111111"
+
+
+def _contrato_locador_pf(locatario: Parte, valor: str = "6000.00") -> Contrato:
+    return Contrato(
+        locador=Parte(tipo=TipoParte.PF, nome="FULANO DE TAL", documento=CPF_FICTICIO),
+        locatario=locatario,
+        valor_aluguel=Decimal(valor),
+    )
+
+
+class _RepoQueContaListAll(FakeEmpresaRepository):
+    """Fake que conta as leituras do portfólio (uma carga por ``montar``)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.leituras = 0
+
+    def list_all(self):
+        self.leituras += 1
+        return super().list_all()
+
+
+def test_locador_pf_locatario_pj_mantem_calculo_de_referencia():
+    contrato = _contrato_locador_pf(
+        Parte(tipo=TipoParte.PJ, nome="Alpha Comercio LTDA", documento=CNPJ_A)
+    )
+    linha = RelatorioService(_repo()).montar([contrato]).contratos.linhas[0]
+
+    assert linha.irrf_retido == Decimal("394.54")  # ADR-004, base 6.000
+    assert linha.dados_incompletos is False
+
+
+def test_locatario_pf_nao_retem_irrf_e_nao_vai_para_revisao():
+    contrato = _contrato_locador_pf(
+        Parte(tipo=TipoParte.PF, nome="CICLANO DE TAL", documento="22222222222")
+    )
+    linha = RelatorioService(_repo()).montar([contrato]).contratos.linhas[0]
+
+    assert linha.irrf is not None
+    assert linha.irrf.retido is False
+    assert linha.irrf_retido == Decimal("0.00")
+    assert linha.irrf.faixa_descricao == "não aplicável (locatário PF)"
+    assert "carnê-leão" in linha.irrf.observacao
+    assert linha.dados_incompletos is False
+
+
+def test_locador_pj_prevalece_sobre_locatario_pf():
+    contrato = Contrato(
+        locador=Parte(tipo=TipoParte.PJ, nome="Imobiliaria XPTO LTDA", documento=CNPJ_X),
+        locatario=Parte(tipo=TipoParte.PF, nome="CICLANO DE TAL"),
+        valor_aluguel=Decimal("6000.00"),
+    )
+    linha = RelatorioService(_repo()).montar([contrato]).contratos.linhas[0]
+
+    assert linha.irrf_retido == Decimal("0.00")
+    assert linha.irrf.faixa_descricao == "não aplicável (locador PJ)"
+
+
+def test_locador_pj_prevalece_sobre_locatario_sem_tipo_fora_do_portfolio():
+    contrato = Contrato(
+        locador=Parte(tipo=TipoParte.PJ, nome="Imobiliaria XPTO LTDA", documento=CNPJ_X),
+        locatario=Parte(tipo=None, nome="Desconhecida XYZ SA"),
+        valor_aluguel=Decimal("6000.00"),
+    )
+    linha = RelatorioService(_repo()).montar([contrato]).contratos.linhas[0]
+
+    assert linha.irrf is not None
+    assert linha.irrf_retido == Decimal("0.00")
+    assert linha.dados_incompletos is False
+
+
+def test_locatario_sem_tipo_casado_por_cnpj_no_portfolio_e_tratado_como_pj():
+    contrato = _contrato_locador_pf(Parte(tipo=None, nome="Nome Ilegivel", documento=CNPJ_A))
+    linha = RelatorioService(_repo()).montar([contrato]).contratos.linhas[0]
+
+    assert linha.irrf_retido == Decimal("394.54")
+    assert linha.dados_incompletos is False
+
+
+def test_locatario_sem_tipo_casado_por_nome_no_portfolio_e_tratado_como_pj():
+    contrato = _contrato_locador_pf(Parte(tipo=None, nome="Alpha Comercio LTDA"))
+    linha = RelatorioService(_repo()).montar([contrato]).contratos.linhas[0]
+
+    assert linha.irrf_retido == Decimal("394.54")
+
+
+def test_locatario_sem_tipo_fora_do_portfolio_vai_para_revisao():
+    contrato = _contrato_locador_pf(
+        Parte(tipo=None, nome="Desconhecida XYZ SA", documento=CNPJ_X)
+    )
+    linha = RelatorioService(_repo()).montar([contrato]).contratos.linhas[0]
+
+    assert linha.irrf is None
+    assert linha.irrf_retido == Decimal("0.00")
+    assert linha.dados_incompletos is True
+
+
+def test_montar_le_o_portfolio_uma_unica_vez():
+    repo = _RepoQueContaListAll()
+    repo.add(Empresa(cnpj=CNPJ_A, razao_social="Alpha Comercio LTDA"))
+    contratos = [
+        _contrato_locador_pf(Parte(tipo=None, nome="Alpha Comercio LTDA")),
+        _contrato_locador_pf(Parte(tipo=None, nome="Outra SA", documento=CNPJ_X)),
+        _contrato_pf_pj(),
+    ]
+    RelatorioService(repo).montar(contratos)
+
+    assert repo.leituras == 1
+
+
+# --------------------------------------------------------------------------- #
 # Relatório 02 — conformidade + pendências (mensagem exata do PRD)
 # --------------------------------------------------------------------------- #
 def test_relatorio02_totais_e_pendencia_com_mensagem_exata():

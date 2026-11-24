@@ -4,7 +4,22 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ## [Não lançado]
 
+Suíte de testes: 679 → 694 aprovados (4 skips esperados; a falha pré-existente
+`test_ocr_real_tesseract` continua igual).
+
+### Adicionado
+- **Documentos de requisitos** em `docs/`: BRD (negócio), FRD (funcional),
+  SRS (especificação de software) e TRD (técnico), descrevendo o comportamento
+  real da versão 0.2.0 com rastreabilidade até os testes.
+
 ### Corrigido
+- **IRRF em contrato entre pessoas físicas:** o cálculo olhava só o tipo do
+  locador, então um contrato PF→PF saía com IRRF retido. Agora só há retenção
+  em Locador PF × Locatário PJ. Locatário PF ⇒ R$ 0,00 com a nota de que o
+  locador recolhe via carnê-leão. Locatário sem tipo identificado é tratado
+  como PJ se casou com uma empresa do portfólio; senão, o IRRF fica vazio e o
+  contrato vai para revisão. Contratos já processados se corrigem sozinhos,
+  porque o Painel e as exportações recalculam o IRRF ao carregar.
 - **CI quebrado por atualização do ruff:** o `pyproject.toml` pedia `ruff>=0.5`, então
   o CI passou a instalar o ruff 0.17, que acusa `RUF100` em dois `# noqa: DTZ011`
   sem uso (a regra DTZ nem está habilitada). Os comentários foram removidos e o

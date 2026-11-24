@@ -173,6 +173,11 @@ Entregue (RF01–RF06, CA-01, CA-03 a CA-06 — ver
   são sobrescritas. Histórico de mudanças em [CHANGELOG.md](CHANGELOG.md).
 - Limitação conhecida: com 2+ locadores o IRRF é calculado só sobre o locador
   principal; os demais são identificados e exibidos, mas não entram na conta.
+- O IRRF só é retido em **Locador PF × Locatário PJ**. Locatário PF ⇒ R$ 0,00
+  (o locador recolhe via carnê-leão); locatário sem tipo identificado conta
+  como PJ se casou com uma empresa do portfólio, senão vai para revisão.
+- Requisitos formais da versão atual: [BRD](docs/BRD.md),
+  [FRD](docs/FRD.md), [SRS](docs/SRS.md) e [TRD](docs/TRD.md).
 
 Fora do escopo desta versão (decisão deliberada, não pendência esquecida):
 - **Docker/`docker-compose`** (CA-02) — adiado; app e banco (SQLite) rodam

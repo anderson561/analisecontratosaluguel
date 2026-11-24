@@ -4,6 +4,8 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ## [Não lançado]
 
+## [0.2.1] - 2026-11-24
+
 Suíte de testes: 679 → 694 aprovados (4 skips esperados; a falha pré-existente
 `test_ocr_real_tesseract` continua igual).
 
